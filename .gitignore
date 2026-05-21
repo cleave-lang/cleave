@@ -1,0 +1,53 @@
+# Build artifacts
+build/
+target/
+dist/
+out/
+
+# C / object files
+*.o
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+*.exe
+
+# Compiler / linker output
+*.gch
+*.pdb
+*.idb
+*.ilk
+*.exp
+
+# Profiling / debug
+*.dSYM/
+*.gcda
+*.gcno
+*.gcov
+core
+core.*
+
+# Cleave-specific intermediates
+*.wasm
+*.wat
+*.cleave.json
+.cleave-cache/
+
+# Editors
+.idea/
+.vscode/
+.vs/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Misc
+*.log
+*.tmp
+*.bak
