@@ -2,36 +2,46 @@
 
 The Cleave compiler bootstrap, written in C11.
 
-This is `v0.0.1`. The binary builds, prints its version, and exits. There is no lexer, parser, or codegen yet. The directory layout is in place so the pieces can land incrementally without the build going stale.
+Current state: the **lexer** is wired up. `cleavec --tokens <file.cv>` reads a source file and prints its token stream. No parser, AST, or codegen yet.
 
 ## Build
 
 ```bash
-make            # produces build/cleavec
-make run        # builds, runs --version
+make             # produces build/cleavec
+make run         # builds, runs --version
 make clean
 ```
 
 The Makefile uses standard `cc`. Tested with GCC and Clang. No external dependencies.
+
+## Try it
+
+```bash
+./build/cleavec --tokens ../examples/minimal-chain.cv
+```
+
+Output is one token per line: `<line>:<col>  <kind>  '<lexeme>'`. EOF is the last entry.
 
 ## Layout
 
 ```
 compiler/
   include/        Public headers
-    cleave.h      Version constant, will grow into the language entry points
+    cleave.h      Version constant
+    lexer.h       Token kinds, Token struct, Lexer struct, public API
   src/            Implementation
-    main.c        CLI entry point
+    main.c        CLI entry point (--version, --help, --tokens)
+    lexer.c       Tokenizer
   build/          Generated; gitignored
 ```
 
-When the lexer, parser, AST, and codegen land, they will fit alongside `main.c` in `src/` and their headers in `include/`. We will resist the urge to over-organize before there is real code to organize around.
+When the parser, AST, and codegen land, they will fit alongside `lexer.c` in `src/` and their headers in `include/`. No premature abstraction.
 
 ## Roadmap (this directory)
 
-- **v0.1** — Lexer for chain manifests and module declarations. A `cleavec --parse <file.cv>` that prints a token stream.
-- **v0.2** — Parser into AST. `cleavec --ast <file.cv>` that prints the parsed tree.
-- **v0.3** — Codegen to WASM. `cleavec <file.cv>` that produces a `.wasm` module.
+- **v0.1** — Lexer + parser for chain manifests and module declarations. `cleavec --ast <file.cv>` prints the parsed AST.
+- **v0.2** — Type checker. Worked end-to-end example.
+- **v0.3** — Codegen to WASM. `cleavec <file.cv>` produces a `.wasm` module.
 - **v0.4** — Self-hosting: the compiler compiles itself.
 
 Roadmap above is intent, not promise. Each step is bigger than the last.
