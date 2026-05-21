@@ -64,6 +64,14 @@ static int is_alnum(char c) {
     return is_alpha(c) || is_digit(c);
 }
 
+static int is_hex_digit(char c) {
+    return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
+static int is_bin_digit(char c) {
+    return c == '0' || c == '1';
+}
+
 /* ============== lexer state ============== */
 
 static char peek(const Lexer *lex) {
@@ -172,6 +180,92 @@ static Token double_char(Lexer *lex, TokenKind kind) {
     return make_token(kind, start, 2, line, column);
 }
 
+/* Number literal: decimal (42), hex (0x42), or binary (0b1010).
+ * Underscores between digits are allowed for readability (1_000_000). */
+static Token scan_number(Lexer *lex) {
+    const char *start = lex->cursor;
+    size_t line = lex->line;
+    size_t column = current_column(lex);
+
+    if (peek(lex) == '0' && (peek_at(lex, 1) == 'x' || peek_at(lex, 1) == 'X')) {
+        advance(lex); /* '0' */
+        advance(lex); /* 'x' */
+        while (is_hex_digit(peek(lex)) || peek(lex) == '_') advance(lex);
+    } else if (peek(lex) == '0' && (peek_at(lex, 1) == 'b' || peek_at(lex, 1) == 'B')) {
+        advance(lex); /* '0' */
+        advance(lex); /* 'b' */
+        while (is_bin_digit(peek(lex)) || peek(lex) == '_') advance(lex);
+    } else {
+        while (is_digit(peek(lex)) || peek(lex) == '_') advance(lex);
+    }
+
+    size_t length = (size_t)(lex->cursor - start);
+    return make_token(TK_NUMBER, start, length, line, column);
+}
+
+/* String literal: "..." with backslash escapes.
+ * The lexeme retains the surrounding quotes and the raw escape sequences;
+ * unescaping is the parser's job. Newlines inside strings are allowed. */
+static Token scan_string(Lexer *lex) {
+    const char *start = lex->cursor;
+    size_t line = lex->line;
+    size_t column = current_column(lex);
+
+    advance(lex); /* opening '"' */
+    while (peek(lex) != '\0' && peek(lex) != '"') {
+        if (peek(lex) == '\\' && peek_at(lex, 1) != '\0') {
+            advance(lex); /* backslash */
+            advance(lex); /* the escaped char */
+        } else {
+            advance(lex);
+        }
+    }
+
+    if (peek(lex) == '\0') {
+        /* unterminated string */
+        size_t length = (size_t)(lex->cursor - start);
+        return make_token(TK_ERROR, start, length, line, column);
+    }
+
+    advance(lex); /* closing '"' */
+    size_t length = (size_t)(lex->cursor - start);
+    return make_token(TK_STRING, start, length, line, column);
+}
+
+/* Character literal: '.' with backslash escapes. */
+static Token scan_char(Lexer *lex) {
+    const char *start = lex->cursor;
+    size_t line = lex->line;
+    size_t column = current_column(lex);
+
+    advance(lex); /* opening '\'' */
+
+    if (peek(lex) == '\0') {
+        return make_token(TK_ERROR, start, 1, line, column);
+    }
+    if (peek(lex) == '\\' && peek_at(lex, 1) != '\0') {
+        advance(lex); /* backslash */
+        advance(lex); /* escaped char */
+    } else {
+        advance(lex);
+    }
+
+    if (peek(lex) != '\'') {
+        /* missing closing quote: keep advancing until we hit one or EOL/EOF */
+        while (peek(lex) != '\0' && peek(lex) != '\'' && peek(lex) != '\n') {
+            advance(lex);
+        }
+        if (peek(lex) != '\'') {
+            size_t length = (size_t)(lex->cursor - start);
+            return make_token(TK_ERROR, start, length, line, column);
+        }
+    }
+
+    advance(lex); /* closing '\'' */
+    size_t length = (size_t)(lex->cursor - start);
+    return make_token(TK_CHAR, start, length, line, column);
+}
+
 /* ============== public API ============== */
 
 void lexer_init(Lexer *lex, const char *source) {
@@ -193,6 +287,18 @@ Token lexer_next(Lexer *lex) {
         return scan_ident(lex);
     }
 
+    if (is_digit(c)) {
+        return scan_number(lex);
+    }
+
+    if (c == '"') {
+        return scan_string(lex);
+    }
+
+    if (c == '\'') {
+        return scan_char(lex);
+    }
+
     /* multi-character punctuation first */
     char n = peek_at(lex, 1);
     if (c == '-' && n == '>') return double_char(lex, TK_ARROW);
@@ -204,6 +310,7 @@ Token lexer_next(Lexer *lex) {
     if (c == '&' && n == '&') return double_char(lex, TK_AND);
     if (c == '|' && n == '|') return double_char(lex, TK_OR);
     if (c == '.' && n == '.') return double_char(lex, TK_DOTDOT);
+    if (c == ':' && n == ':') return double_char(lex, TK_COLONCOLON);
 
     /* single-character punctuation */
     switch (c) {
@@ -225,6 +332,8 @@ Token lexer_next(Lexer *lex) {
     case '/': return single(lex, TK_SLASH);
     case '!': return single(lex, TK_BANG);
     case '.': return single(lex, TK_DOT);
+    case '|': return single(lex, TK_PIPE);
+    case '%': return single(lex, TK_PERCENT);
     default: break;
     }
 
@@ -241,6 +350,9 @@ const char *token_kind_name(TokenKind kind) {
     case TK_EOF:          return "EOF";
     case TK_ERROR:        return "ERROR";
     case TK_IDENT:        return "IDENT";
+    case TK_NUMBER:       return "NUMBER";
+    case TK_STRING:       return "STRING";
+    case TK_CHAR:         return "CHAR";
     case TK_KW_CHAIN:     return "KW_CHAIN";
     case TK_KW_MODULE:    return "KW_MODULE";
     case TK_KW_PROTOCOL:  return "KW_PROTOCOL";
@@ -281,6 +393,8 @@ const char *token_kind_name(TokenKind kind) {
     case TK_SLASH:        return "SLASH";
     case TK_BANG:         return "BANG";
     case TK_DOT:          return "DOT";
+    case TK_PIPE:         return "PIPE";
+    case TK_PERCENT:      return "PERCENT";
     case TK_ARROW:        return "ARROW";
     case TK_FAT_ARROW:    return "FAT_ARROW";
     case TK_EQ:           return "EQ";
@@ -290,6 +404,7 @@ const char *token_kind_name(TokenKind kind) {
     case TK_AND:          return "AND";
     case TK_OR:           return "OR";
     case TK_DOTDOT:       return "DOTDOT";
+    case TK_COLONCOLON:   return "COLONCOLON";
     }
     return "UNKNOWN";
 }

@@ -10,6 +10,11 @@ typedef enum {
     /* identifiers (keywords are recognized via post-scan lookup) */
     TK_IDENT,
 
+    /* literals */
+    TK_NUMBER, /* decimal, hex (0x...), or binary (0b...) integer */
+    TK_STRING, /* "..." with backslash escapes */
+    TK_CHAR,   /* '.' with backslash escapes */
+
     /* keywords */
     TK_KW_CHAIN,
     TK_KW_MODULE,
@@ -53,6 +58,8 @@ typedef enum {
     TK_SLASH,     /* / */
     TK_BANG,      /* ! */
     TK_DOT,       /* . */
+    TK_PIPE,      /* | */
+    TK_PERCENT,   /* % */
 
     /* multi-character punctuation */
     TK_ARROW,     /* -> */
@@ -63,7 +70,8 @@ typedef enum {
     TK_GEQ,       /* >= */
     TK_AND,       /* && */
     TK_OR,        /* || */
-    TK_DOTDOT     /* .. */
+    TK_DOTDOT,    /* .. */
+    TK_COLONCOLON /* :: */
 } TokenKind;
 
 typedef struct {

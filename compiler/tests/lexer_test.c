@@ -221,6 +221,145 @@ TEST(test_chain_manifest_smoke) {
     ASSERT_EQ_INT(t.kind, TK_EOF);
 }
 
+TEST(test_number_decimal) {
+    Lexer lex;
+    lexer_init(&lex, "42 0 1234567890");
+    check_next(&lex, TK_NUMBER, "42");
+    check_next(&lex, TK_NUMBER, "0");
+    check_next(&lex, TK_NUMBER, "1234567890");
+}
+
+TEST(test_number_hex) {
+    Lexer lex;
+    lexer_init(&lex, "0x42 0xABCD 0xff");
+    check_next(&lex, TK_NUMBER, "0x42");
+    check_next(&lex, TK_NUMBER, "0xABCD");
+    check_next(&lex, TK_NUMBER, "0xff");
+}
+
+TEST(test_number_binary) {
+    Lexer lex;
+    lexer_init(&lex, "0b0 0b1010 0B11110000");
+    check_next(&lex, TK_NUMBER, "0b0");
+    check_next(&lex, TK_NUMBER, "0b1010");
+    check_next(&lex, TK_NUMBER, "0B11110000");
+}
+
+TEST(test_number_underscores) {
+    Lexer lex;
+    lexer_init(&lex, "1_000_000 0xFF_FF 0b1010_1010");
+    check_next(&lex, TK_NUMBER, "1_000_000");
+    check_next(&lex, TK_NUMBER, "0xFF_FF");
+    check_next(&lex, TK_NUMBER, "0b1010_1010");
+}
+
+TEST(test_string_simple) {
+    Lexer lex;
+    lexer_init(&lex, "\"hello\" \"\" \"with space\"");
+    check_next(&lex, TK_STRING, "\"hello\"");
+    check_next(&lex, TK_STRING, "\"\"");
+    check_next(&lex, TK_STRING, "\"with space\"");
+}
+
+TEST(test_string_with_escapes) {
+    /* Lexer keeps the raw escapes in the lexeme; the parser unescapes. */
+    Lexer lex;
+    lexer_init(&lex, "\"line\\nbreak\" \"quote: \\\"\" \"back: \\\\\"");
+    check_next(&lex, TK_STRING, "\"line\\nbreak\"");
+    check_next(&lex, TK_STRING, "\"quote: \\\"\"");
+    check_next(&lex, TK_STRING, "\"back: \\\\\"");
+}
+
+TEST(test_string_unterminated_is_error) {
+    Lexer lex;
+    lexer_init(&lex, "\"never closed");
+    Token t = lexer_next(&lex);
+    ASSERT_EQ_INT(t.kind, TK_ERROR);
+}
+
+TEST(test_char_simple) {
+    Lexer lex;
+    lexer_init(&lex, "'a' '0' ' '");
+    check_next(&lex, TK_CHAR, "'a'");
+    check_next(&lex, TK_CHAR, "'0'");
+    check_next(&lex, TK_CHAR, "' '");
+}
+
+TEST(test_char_with_escape) {
+    Lexer lex;
+    lexer_init(&lex, "'\\n' '\\t' '\\\\' '\\''");
+    check_next(&lex, TK_CHAR, "'\\n'");
+    check_next(&lex, TK_CHAR, "'\\t'");
+    check_next(&lex, TK_CHAR, "'\\\\'");
+    check_next(&lex, TK_CHAR, "'\\''");
+}
+
+TEST(test_pipe_single) {
+    /* '|' alone is TK_PIPE (closure syntax); '||' is TK_OR. */
+    Lexer lex;
+    lexer_init(&lex, "|v|");
+    check_next(&lex, TK_PIPE, "|");
+    check_next(&lex, TK_IDENT, "v");
+    check_next(&lex, TK_PIPE, "|");
+}
+
+TEST(test_pipe_versus_or) {
+    Lexer lex;
+    lexer_init(&lex, "| ||");
+    Token t = lexer_next(&lex);
+    ASSERT_EQ_INT(t.kind, TK_PIPE);
+    t = lexer_next(&lex);
+    ASSERT_EQ_INT(t.kind, TK_OR);
+}
+
+TEST(test_percent) {
+    Lexer lex;
+    lexer_init(&lex, "5% 100%");
+    check_next(&lex, TK_NUMBER, "5");
+    check_next(&lex, TK_PERCENT, "%");
+    check_next(&lex, TK_NUMBER, "100");
+    check_next(&lex, TK_PERCENT, "%");
+}
+
+TEST(test_coloncolon_versus_colon) {
+    Lexer lex;
+    lexer_init(&lex, "Stake::burn label:");
+    check_next(&lex, TK_IDENT, "Stake");
+    check_next(&lex, TK_COLONCOLON, "::");
+    check_next(&lex, TK_IDENT, "burn");
+    check_next(&lex, TK_IDENT, "label");
+    check_next(&lex, TK_COLON, ":");
+}
+
+TEST(test_literals_smoke) {
+    /* A snippet of an actual module module body, ensuring numbers, strings,
+     * and identifiers all coexist correctly. */
+    Lexer lex;
+    lexer_init(&lex,
+               "gas increment = { cpu: 100, storage: 8 }\n"
+               "require(bal >= amount, \"insufficient balance\")");
+    check_next(&lex, TK_KW_GAS, "gas");
+    check_next(&lex, TK_IDENT, "increment");
+    check_next(&lex, TK_ASSIGN, "=");
+    check_next(&lex, TK_LBRACE, "{");
+    check_next(&lex, TK_IDENT, "cpu");
+    check_next(&lex, TK_COLON, ":");
+    check_next(&lex, TK_NUMBER, "100");
+    check_next(&lex, TK_COMMA, ",");
+    check_next(&lex, TK_IDENT, "storage");
+    check_next(&lex, TK_COLON, ":");
+    check_next(&lex, TK_NUMBER, "8");
+    check_next(&lex, TK_RBRACE, "}");
+    check_next(&lex, TK_IDENT, "require");
+    check_next(&lex, TK_LPAREN, "(");
+    check_next(&lex, TK_IDENT, "bal");
+    check_next(&lex, TK_GEQ, ">=");
+    check_next(&lex, TK_IDENT, "amount");
+    check_next(&lex, TK_COMMA, ",");
+    check_next(&lex, TK_STRING, "\"insufficient balance\"");
+    check_next(&lex, TK_RPAREN, ")");
+}
+
 int main(void) {
     RUN(test_eof_on_empty_input);
     RUN(test_eof_after_whitespace_only);
@@ -237,5 +376,19 @@ int main(void) {
     RUN(test_arrow_versus_minus);
     RUN(test_error_on_unknown_char);
     RUN(test_chain_manifest_smoke);
+    RUN(test_number_decimal);
+    RUN(test_number_hex);
+    RUN(test_number_binary);
+    RUN(test_number_underscores);
+    RUN(test_string_simple);
+    RUN(test_string_with_escapes);
+    RUN(test_string_unterminated_is_error);
+    RUN(test_char_simple);
+    RUN(test_char_with_escape);
+    RUN(test_pipe_single);
+    RUN(test_pipe_versus_or);
+    RUN(test_percent);
+    RUN(test_coloncolon_versus_colon);
+    RUN(test_literals_smoke);
     REPORT();
 }
