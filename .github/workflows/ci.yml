@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   compiler:
-    name: Build compiler
+    name: Build · Test
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -30,3 +30,6 @@ jobs:
           out=$(./compiler/build/cleavec --version)
           echo "stdout: $out"
           echo "$out" | grep -q "cleavec 0.0.1" || { echo "version output unexpected"; exit 1; }
+
+      - name: Test
+        run: make -C compiler test
