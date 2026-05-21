@@ -1,0 +1,48 @@
+// A fungible token module.
+//
+// State, gas, events, and the public interface live in one block.
+// Effect signatures on `fn` declarations track what each function
+// is allowed to do; the compiler refuses to ship a `view` function
+// that mutates state, or a `pure` function that reads storage.
+
+module Token {
+    state balances:     Map<Address, u128>
+    state total_supply: u128
+
+    event Transfer(from: Address, to: Address, amount: u128)
+    event Mint(to: Address, amount: u128)
+
+    gas transfer = { cpu: 200, storage: 32 }
+    gas mint     = { cpu: 250, storage: 32 }
+
+    fn transfer(to: Address, amount: u128) -> Result<()> {
+        let from = tx.signer
+        let from_bal = balances.get(from).unwrap_or(0)
+
+        require(from_bal >= amount, "insufficient balance")
+
+        balances[from] = from_bal - amount
+        balances[to]   = balances.get(to).unwrap_or(0) + amount
+
+        emit Transfer { from, to, amount }
+        Ok(())
+    }
+
+    fn mint(to: Address, amount: u128) -> Result<()> {
+        require(tx.signer == minter(), "not authorized")
+
+        balances[to]   = balances.get(to).unwrap_or(0) + amount
+        total_supply   = total_supply + amount
+
+        emit Mint { to, amount }
+        Ok(())
+    }
+
+    view fn balance_of(addr: Address) -> u128 {
+        balances.get(addr).unwrap_or(0)
+    }
+
+    view fn supply() -> u128 {
+        total_supply
+    }
+}

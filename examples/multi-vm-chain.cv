@@ -1,0 +1,22 @@
+// A chain that embeds three execution environments.
+//
+// Solidity contracts deploy to the EVM module unmodified. Solana
+// programs deploy to the SVM module unmodified. Contracts written
+// in Cleave compile to WASM and run alongside both.
+//
+// All three share the same state root. The chain is the boundary;
+// the VM is one of several possible interpreters.
+
+chain MultiVm {
+    consensus: HotStuff<sig=BLS12_381, finality=Deterministic>
+    gas:       Multidim<{cpu, storage, witness}>
+    state:     SparseMerkle<key=u256, hash=Blake3>
+
+    exec {
+        primary:  WasmVM<deterministic>
+        embedded: [
+            EVM<runtime=REVM>,
+            SVM<runtime=SolanaBPF>,
+        ]
+    }
+}

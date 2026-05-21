@@ -1,0 +1,16 @@
+// The smallest interesting Cleave program: a chain manifest.
+//
+// Every line below is a protocol from the standard library, plus a
+// single argument list saying how to instantiate it. The compiler
+// type-checks that the four subsystems are mutually compatible,
+// then codegens a working node binary.
+//
+// Replace any one of these lines with a module that satisfies the
+// same protocol and the rest of the chain does not care.
+
+chain MyChain {
+    consensus: Tendermint<sig=BLS12_381, finality=Deterministic>
+    gas:       Multidim<{cpu, storage, witness}>
+    state:     SparseMerkle<key=u256, hash=Blake3>
+    exec:      WasmVM<deterministic>
+}

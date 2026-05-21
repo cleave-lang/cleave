@@ -1,0 +1,20 @@
+// A contract module: state, gas cost, and effect declared together.
+//
+// The `gas` block names the per-call cost dimensions. The compiler
+// refuses to ship a module whose declared cost is smaller than the
+// cost it actually incurs at runtime.
+
+module Counter {
+    state count: u64
+
+    gas increment = { cpu: 100, storage: 8 }
+
+    fn increment() -> Result<u64> {
+        count = count + 1
+        Ok(count)
+    }
+
+    fn read() -> u64 {
+        count
+    }
+}

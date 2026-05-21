@@ -1,0 +1,55 @@
+// A custom consensus protocol, written as a module.
+//
+// This is the central demo of Cleave's design: consensus is not
+// a built-in. It is a protocol with an effect signature, and any
+// module satisfying the signature can be plugged into a chain.
+//
+// Existing chain frameworks make the common case (Tendermint, Aura)
+// easy and the novel case impossible. Cleave makes both look the
+// same: one is a stdlib module, the other is yours.
+
+protocol WeightedVRF implements ConsensusProtocol {
+    // Effects this consensus needs handlers for
+    effect propose_block(state: State) -> Block
+    effect attest_vote(block: Block)   -> Signature
+    effect finalize(block: Block)
+    effect slash(evidence: Evidence)
+
+    // Application-aware leader selection: the proposer's weight is a
+    // function of arbitrary chain state, not just locked stake. This
+    // is the axis that forces a framework fork in Substrate-style
+    // systems; in Cleave it is a function the protocol declares.
+    fn select_proposer(epoch: Epoch) -> Address {
+        let weights = active_validators()
+            .map(|v| (v.address, useful_work_score(v.history)))
+        vrf_select(epoch.seed, weights)
+    }
+
+    // Slashing predicate is a function the application supplies.
+    // The runtime fires it when matching evidence is observed.
+    slash_on InvalidProposal { proposer: Address, block: Block }
+        when !verify_block(block)
+        penalty Stake::burn(proposer, 5%)
+
+    slash_on Equivocation { validator: Address, a: Vote, b: Vote }
+        when a.height == b.height && a.signature != b.signature
+        penalty Stake::burn(validator, 100%)
+
+    // Finality threshold is conditional on block contents. A high-
+    // value block can demand supermajority; a routine block can
+    // finalize on simple majority. The handler is just a function.
+    fn finality_threshold(block: Block) -> Stake {
+        match block.max_value_tier() {
+            ValueTier::High   => stake::two_thirds(),
+            ValueTier::Normal => stake::majority_plus_one(),
+        }
+    }
+}
+
+// Use it in a chain by referencing the protocol module directly.
+chain ExampleChain {
+    consensus: WeightedVRF
+    gas:       Multidim<{cpu, storage, witness}>
+    state:     SparseMerkle<key=u256, hash=Blake3>
+    exec:      WasmVM<deterministic>
+}

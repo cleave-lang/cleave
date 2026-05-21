@@ -26,6 +26,8 @@ chain MyChain {
 
 Every line above is a protocol that ships with the standard library. Replace any one of them with your own implementation by satisfying the same interface. Your chain is the composition; the language is the composition rules.
 
+More syntax in [`examples/`](examples/): chain manifests, contract modules, and a worked custom-consensus protocol. The full architecture story lives in [`DESIGN.md`](DESIGN.md).
+
 ## Why
 
 The dominant chain frameworks (Substrate, Cosmos SDK, Sovereign SDK) reach for the same shape: write a state-transition function in a general-purpose language, plug into a fixed consensus, accept a fixed validator-set abstraction. The moment a project needs a consensus mechanism, slashing rule, or block-contents shape that the framework did not anticipate, the path is to fork the framework. Forks accumulate. Drift accumulates. Each chain ends up its own dialect.
