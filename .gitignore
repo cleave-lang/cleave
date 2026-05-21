@@ -31,8 +31,8 @@ core.*
 # Cleave-specific intermediates
 *.wasm
 *.wat
-*.cleave.json
-.cleave-cache/
+*.cv.json
+.cv-cache/
 
 # Editors
 .idea/
