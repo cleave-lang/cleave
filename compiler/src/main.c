@@ -2,16 +2,19 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ast.h"
 #include "cleave.h"
 #include "lexer.h"
+#include "parser.h"
 
 static void usage(const char *prog) {
     fprintf(stderr,
             "usage:\n"
             "  %s --version\n"
             "  %s --help\n"
-            "  %s --tokens <file.cv>\n",
-            prog, prog, prog);
+            "  %s --tokens <file.cv>\n"
+            "  %s --ast <file.cv>\n",
+            prog, prog, prog, prog);
 }
 
 static char *read_file(const char *path) {
@@ -74,6 +77,29 @@ static int cmd_tokens(const char *path) {
     return 0;
 }
 
+static int cmd_ast(const char *path) {
+    char *source = read_file(path);
+    if (!source) return 1;
+
+    Lexer lex;
+    lexer_init(&lex, source);
+
+    Parser parser;
+    parser_init(&parser, &lex);
+
+    AstNode *chain = parser_parse_chain(&parser);
+    if (!chain || parser_had_error(&parser)) {
+        /* The parser reports its own errors to stderr. */
+        free(source);
+        return 1;
+    }
+
+    ast_dump(chain, stdout, 0);
+    /* AST is leaked intentionally; the process exits next. */
+    free(source);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         usage(argv[0]);
@@ -97,6 +123,15 @@ int main(int argc, char **argv) {
             return 1;
         }
         return cmd_tokens(argv[2]);
+    }
+
+    if (strcmp(argv[1], "--ast") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "error: --ast requires a file argument\n");
+            usage(argv[0]);
+            return 1;
+        }
+        return cmd_ast(argv[2]);
     }
 
     fprintf(stderr,
