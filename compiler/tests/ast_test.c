@@ -1,3 +1,6 @@
+/* open_memstream requires POSIX.1-2008 feature visibility on glibc. */
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
