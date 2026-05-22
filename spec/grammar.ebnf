@@ -1,0 +1,110 @@
+(* ============================================================
+   Cleave grammar in EBNF (ISO/IEC 14977 dialect).
+
+   This file describes the surface syntax the parser actually
+   implements today. Productions not yet implemented are listed
+   at the bottom under "(* planned *)" with no semantics.
+
+   Reading guide:
+     - identifiers in quotes are literal token text
+     - identifiers in CamelCase reference a production below
+     - identifiers in UPPER_CASE reference a lexer token kind
+       (defined in compiler/include/lexer.h)
+     - `?` means optional, `*` means zero-or-more,
+       `+` means one-or-more, `|` is alternation, `,` is sequence.
+
+   Companion: compiler/src/parser.c implements this grammar.
+   ============================================================ *)
+
+
+(* ---------- top-level ---------- *)
+
+Program
+    = ChainDecl                            (* only top-level form parsed today *)
+    ;
+
+ChainDecl
+    = "chain", IDENT, "{",
+        ( SubsystemAssign, [ ";" | "," ] )*,
+      "}"
+    ;
+
+SubsystemAssign
+    = SubsystemKey, ":", TypeExpr
+    ;
+
+SubsystemKey
+    = "consensus" | "gas" | "state" | "exec" | "da"
+    ;
+
+
+(* ---------- types ---------- *)
+
+TypeExpr
+    = TypeNamed
+    | TypeGeneric
+    ;
+
+TypeNamed
+    = IDENT
+    ;
+
+TypeGeneric
+    = IDENT, "<", TypeArgs, ">"
+    ;
+
+TypeArgs
+    = TypeParam, ( ",", TypeParam )*, [ "," ]
+    ;
+
+TypeParam
+    = [ IDENT, "=" ], TypeParamValue
+    ;
+
+TypeParamValue
+    = IDENT
+    | NUMBER
+    | STRING
+    | SetLiteral
+    ;
+
+(* { a, b, c } as a positional set of identifiers / numbers.
+   Modeled in the AST as an anonymous TypeGeneric with empty name. *)
+SetLiteral
+    = "{", SetValue, ( ",", SetValue )*, [ "," ], "}"
+    ;
+
+SetValue
+    = IDENT
+    | NUMBER
+    | STRING
+    ;
+
+
+(* ---------- terminals ---------- *)
+
+(* IDENT: [a-zA-Z_][a-zA-Z0-9_]*, distinguished from reserved keywords.
+   See KEYWORDS in compiler/src/lexer.c. *)
+IDENT       = ? lexer token TK_IDENT ? ;
+
+(* NUMBER: decimal, hex (0x...), or binary (0b...), with optional
+   `_` separators between digits. No floating point in v0. *)
+NUMBER      = ? lexer token TK_NUMBER ? ;
+
+(* STRING: "..." with backslash escapes. The lexeme retains its
+   surrounding quotes and raw escape sequences; unescaping is
+   the parser's job at a later stage. *)
+STRING      = ? lexer token TK_STRING ? ;
+
+
+(* ============================================================
+   (* planned *) productions below.
+
+   These appear in compiler/include/ast.h as node kinds but the
+   parser does not yet accept them. They will land in subsequent
+   compiler PRs and this file will be extended with their
+   formal grammar at that time.
+
+   ModuleDecl, ProtocolDecl, FnDecl, EffectDecl, SlashOnDecl,
+   StateDecl, GasDecl, Expression, Statement, BlockExpr.
+   ============================================================ *)

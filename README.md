@@ -26,7 +26,7 @@ chain MyChain {
 
 Every line above is a protocol that ships with the standard library. Replace any one of them with your own implementation by satisfying the same interface. Your chain is the composition; the language is the composition rules.
 
-More syntax in [`examples/`](examples/): chain manifests, contract modules, and a worked custom-consensus protocol. The full architecture story lives in [`DESIGN.md`](DESIGN.md).
+More syntax in [`examples/`](examples/): chain manifests, contract modules, and a worked custom-consensus protocol. The full architecture story lives in [`DESIGN.md`](DESIGN.md). The formal grammar and glossary are in [`spec/`](spec/).
 
 ## Why
 
