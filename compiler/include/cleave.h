@@ -1,6 +1,6 @@
 #ifndef CLEAVE_H
 #define CLEAVE_H
 
-#define CLEAVE_VERSION "0.0.1"
+#define CLEAVE_VERSION "0.1.0"
 
 #endif /* CLEAVE_H */
