@@ -10,7 +10,7 @@ The spec evolves alongside the compiler. Sections marked **stable** match what t
 |---|---|---|
 | [Grammar (chain block)](grammar.ebnf) | stable | What `cleavec --ast` parses today |
 | [Glossary](glossary.md) | stable | Project terminology |
-| Protocols: Consensus | draft (issue [#6](https://github.com/cleave-lang/cleave/issues/6)) | RFC in progress |
+| [Protocols: Consensus](protocols/consensus.md) | draft (issue [#6](https://github.com/cleave-lang/cleave/issues/6)) | First full write-up landed; iterating on open questions |
 | Protocols: Gas | draft (issue [#7](https://github.com/cleave-lang/cleave/issues/7)) | RFC in progress |
 | Protocols: State | draft (issue [#8](https://github.com/cleave-lang/cleave/issues/8)) | RFC in progress |
 | Protocols: DataAvailability | draft (issue [#16](https://github.com/cleave-lang/cleave/issues/16)) | RFC in progress |
