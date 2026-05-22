@@ -39,9 +39,9 @@ When the parser, AST, and codegen land, they will fit alongside `lexer.c` in `sr
 
 ## Roadmap (this directory)
 
-- **v0.1** — Lexer + parser for chain manifests and module declarations. `cleavec --ast <file.cv>` prints the parsed AST.
-- **v0.2** — Type checker. Worked end-to-end example.
-- **v0.3** — Codegen to WASM. `cleavec <file.cv>` produces a `.wasm` module.
-- **v0.4** — Self-hosting: the compiler compiles itself.
+- **v0.1**: Lexer + parser for chain manifests and module declarations. `cleavec --ast <file.cv>` prints the parsed AST.
+- **v0.2**: Type checker. Worked end-to-end example.
+- **v0.3**: Codegen to WASM. `cleavec <file.cv>` produces a `.wasm` module.
+- **v0.4**: Self-hosting: the compiler compiles itself.
 
 Roadmap above is intent, not promise. Each step is bigger than the last.
