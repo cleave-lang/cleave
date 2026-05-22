@@ -1,5 +1,8 @@
 CC      ?= cc
-CFLAGS  := -std=c11 -Wall -Wextra -Werror -Wpedantic -O2 -Iinclude
+# _POSIX_C_SOURCE=200809L exposes clock_gettime + open_memstream on glibc
+# (macOS exposes both unconditionally; defining this is a no-op there).
+CFLAGS  := -std=c11 -Wall -Wextra -Werror -Wpedantic -O2 -Iinclude \
+           -D_POSIX_C_SOURCE=200809L
 LDFLAGS :=
 
 SRC     := $(wildcard src/*.c)
