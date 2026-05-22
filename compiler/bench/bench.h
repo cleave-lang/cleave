@@ -17,8 +17,8 @@
 #ifndef CLEAVE_BENCH_H
 #define CLEAVE_BENCH_H
 
-/* clock_gettime requires POSIX.1-2008 visibility on glibc. */
-#define _POSIX_C_SOURCE 200809L
+/* clock_gettime requires POSIX.1-2008 visibility. _POSIX_C_SOURCE is defined
+ * in the Makefile (-D flag) so include order in callers doesn't matter. */
 
 #include <stdio.h>
 #include <stdlib.h>
