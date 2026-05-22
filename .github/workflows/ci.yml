@@ -33,3 +33,6 @@ jobs:
 
       - name: Test
         run: make -C compiler test
+
+      - name: Bench
+        run: make -C compiler bench
