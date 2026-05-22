@@ -13,7 +13,7 @@ The spec evolves alongside the compiler. Sections marked **stable** match what t
 | [Protocols: Consensus](protocols/consensus.md) | draft (issue [#6](https://github.com/cleave-lang/cleave/issues/6)) | First full write-up landed; iterating on open questions |
 | [Protocols: Gas](protocols/gas.md) | draft (issue [#7](https://github.com/cleave-lang/cleave/issues/7)) | First full write-up landed; iterating |
 | [Protocols: State](protocols/state.md) | draft (issue [#8](https://github.com/cleave-lang/cleave/issues/8)) | First full write-up landed; iterating |
-| Protocols: DataAvailability | draft (issue [#16](https://github.com/cleave-lang/cleave/issues/16)) | RFC in progress |
+| [Protocols: DataAvailability](protocols/da.md) | draft (issue [#16](https://github.com/cleave-lang/cleave/issues/16)) | First full write-up landed; iterating |
 | Effect system | draft (issue [#9](https://github.com/cleave-lang/cleave/issues/9)) | RFC in progress |
 | Module bodies (state, gas, fn, effect) | planned | Parser does not yet handle these |
 | Type system | planned | No type checker exists yet |
