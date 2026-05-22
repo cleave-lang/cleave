@@ -94,7 +94,7 @@ Then look at [`examples/multi-vm-chain.cv`](examples/multi-vm-chain.cv) for a ch
 
 ## Open questions
 
-These are unresolved as of v0.0.1. We are interested in collaborators on any of them.
+These are unresolved as of v0.1.0. We are interested in collaborators on any of them.
 
 - **Effect-handler composition.** When two subsystems declare overlapping effects (e.g. consensus and execution both want to fire `emit_event`), how does the compiler decide which handler runs first? Algebraic-effect literature has several proposals. We have not chosen.
 - **Cross-VM call semantics.** When a Cleave module on the WASM VM calls a Solidity contract on the embedded EVM, what is the cost model? Reentrancy semantics? Gas budgeting? This is a design question that gets answered when the EVM module lands.

@@ -11,7 +11,7 @@
 
 Cleave treats the seams between subsystems as first-class language primitives. Consensus, gas, state, and the execution VM are declared in Cleave and composed like any other type. Most chain frameworks make the common case easy and the uncommon case impossible; Cleave is built to make the uncommon case the default.
 
-> Status: v0.0.1. The language is being designed in public. Most of it does not exist yet.
+> Status: v0.1.0. The compiler lexes and parses chain manifests. Codegen and runtime are not implemented yet.
 
 ## At a glance
 
