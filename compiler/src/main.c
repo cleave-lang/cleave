@@ -87,14 +87,14 @@ static int cmd_ast(const char *path) {
     Parser parser;
     parser_init(&parser, &lex);
 
-    AstNode *chain = parser_parse_chain(&parser);
-    if (!chain || parser_had_error(&parser)) {
+    AstNode *program = parser_parse_program(&parser);
+    if (!program || parser_had_error(&parser)) {
         /* The parser reports its own errors to stderr. */
         free(source);
         return 1;
     }
 
-    ast_dump(chain, stdout, 0);
+    ast_dump(program, stdout, 0);
     /* AST is leaked intentionally; the process exits next. */
     free(source);
     return 0;

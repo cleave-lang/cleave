@@ -20,7 +20,13 @@
 (* ---------- top-level ---------- *)
 
 Program
-    = ChainDecl                            (* only top-level form parsed today *)
+    = TopLevel*
+    ;
+
+TopLevel
+    = ChainDecl
+    | ModuleDecl
+    | ProtocolDecl
     ;
 
 ChainDecl
@@ -35,6 +41,172 @@ SubsystemAssign
 
 SubsystemKey
     = "consensus" | "gas" | "state" | "exec" | "da"
+    ;
+
+
+(* ---------- modules ---------- *)
+
+ModuleDecl
+    = "module", IDENT, "{", ModuleItem*, "}"
+    ;
+
+ModuleItem
+    = StateDecl
+    | GasDecl
+    | EventDecl
+    | EffectDecl
+    | FnDecl
+    ;
+
+StateDecl
+    = "state", IDENT, ":", TypeExpr
+    ;
+
+GasDecl
+    = "gas", IDENT, "=", Expr
+    ;
+
+EventDecl
+    = "event", IDENT, "(", [ ParamList ], ")"
+    ;
+
+EffectDecl
+    = "effect", IDENT, "(", [ ParamList ], ")", [ "->", TypeExpr ], [ "deferred" ]
+    ;
+
+FnDecl
+    = [ "pure" | "view" ], "fn", IDENT, "(", [ ParamList ], ")",
+      [ "->", TypeExpr ],
+      [ "with", "[", [ IDENT, ( ",", IDENT )* ], "]" ],
+      Block
+    ;
+
+ParamList
+    = Param, ( ",", Param )*, [ "," ]
+    ;
+
+Param
+    = IDENT, ":", TypeExpr
+    ;
+
+
+(* ---------- protocols ---------- *)
+
+ProtocolDecl
+    = "protocol", IDENT, [ "implements", TypeExpr ],
+      "{", ProtocolItem*, "}"
+    ;
+
+ProtocolItem
+    = StateDecl
+    | EffectDecl
+    | FnDecl
+    | SlashOnDecl
+    ;
+
+SlashOnDecl
+    = "slash_on", IDENT, "{",
+        ( IDENT, ":", TypeExpr, [ "," ] )*,
+      "}",
+      [ "when", Expr ],
+      [ "penalty", Expr ]
+    ;
+
+
+(* ---------- statements + expressions ---------- *)
+
+Block
+    = "{", Stmt*, [ Expr ], "}"
+    ;
+
+Stmt
+    = LetStmt
+    | ReturnStmt
+    | IfStmt
+    | MatchStmt
+    | ExprStmt
+    ;
+
+LetStmt
+    = "let", IDENT, [ ":", TypeExpr ], "=", Expr
+    ;
+
+ReturnStmt
+    = "return", [ Expr ]
+    ;
+
+IfStmt
+    = "if", Expr, Block, [ "else", ( Block | IfStmt ) ]
+    ;
+
+MatchStmt
+    = "match", Expr, "{", MatchArm*, "}"
+    ;
+
+MatchArm
+    = Expr, "=>", Expr, [ "," ]
+    ;
+
+ExprStmt
+    = Expr
+    ;
+
+(* Expressions form a precedence-climbed binary expression grammar.
+   The full operator table lives in compiler/src/parser.c::binary_prec
+   and mirrors tree-sitter-cleave/grammar.js exactly. Higher numbers
+   bind tighter:
+       10  *  /
+        9  +  -
+        8  ==  !=  <  >  <=  >=
+        7  &&
+        6  ||
+        5  =
+   Unary operators (!, -) and postfix operators (call, index, member,
+   path, percent) bind tighter than any binary operator. *)
+
+Expr
+    = PrefixExpr, ( BinaryOp, PrefixExpr )*
+    ;
+
+PrefixExpr
+    = ( "!" | "-" )?, PostfixExpr
+    ;
+
+PostfixExpr
+    = Primary, PostfixSuffix*
+    ;
+
+PostfixSuffix
+    = "(", [ Expr, ( ",", Expr )* ], ")"   (* call *)
+    | "[", Expr, "]"                       (* index *)
+    | ".", IDENT                           (* member *)
+    | "::", IDENT                          (* path *)
+    | "%"                                  (* percent *)
+    ;
+
+Primary
+    = IDENT
+    | NUMBER
+    | STRING
+    | CHAR
+    | "true" | "false" | "null"
+    | "(", Expr, ")"
+    | Block
+    | RecordLiteral
+    ;
+
+RecordLiteral
+    = "{", RecordField, ( ",", RecordField )*, [ "," ], "}"
+    ;
+
+RecordField
+    = IDENT, ":", Expr
+    ;
+
+BinaryOp
+    = "*" | "/" | "+" | "-"
+    | "==" | "!=" | "<" | ">" | "<=" | ">="
+    | "&&" | "||" | "="
     ;
 
 
@@ -98,13 +270,18 @@ STRING      = ? lexer token TK_STRING ? ;
 
 
 (* ============================================================
-   (* planned *) productions below.
+   Productions not yet in the grammar.
 
-   These appear in compiler/include/ast.h as node kinds but the
-   parser does not yet accept them. They will land in subsequent
-   compiler PRs and this file will be extended with their
-   formal grammar at that time.
+   These appear in the standard-library RFCs and example files
+   but the parser does not yet accept them. They land in their
+   own issues.
 
-   ModuleDecl, ProtocolDecl, FnDecl, EffectDecl, SlashOnDecl,
-   StateDecl, GasDecl, Expression, Statement, BlockExpr.
+     - Closure expressions:        `|param| body`
+     - Unit type and value:        `()`
+     - Struct literals (shorthand):
+         `StructName { field_a, field_b: expr }`
+     - Nested subsystem blocks:
+         `exec { primary: ..., embedded: [...] }`
+     - Lambda / move-capture variants
+     - Pattern grammar beyond simple identifiers in match arms
    ============================================================ *)

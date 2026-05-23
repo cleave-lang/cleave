@@ -22,9 +22,13 @@ static const struct keyword_entry KEYWORDS[] = {
     {"null",       4, TK_KW_NULL},
     {"exec",       4, TK_KW_EXEC},
     {"else",       4, TK_KW_ELSE},
+    {"pure",       4, TK_KW_PURE},
     {"true",       4, TK_KW_TRUE},
+    {"view",       4, TK_KW_VIEW},
     {"when",       4, TK_KW_WHEN},
+    {"with",       4, TK_KW_WITH},
     {"chain",      5, TK_KW_CHAIN},
+    {"event",      5, TK_KW_EVENT},
     {"false",      5, TK_KW_FALSE},
     {"match",      5, TK_KW_MATCH},
     {"state",      5, TK_KW_STATE},
@@ -32,6 +36,7 @@ static const struct keyword_entry KEYWORDS[] = {
     {"module",     6, TK_KW_MODULE},
     {"return",     6, TK_KW_RETURN},
     {"penalty",    7, TK_KW_PENALTY},
+    {"deferred",   8, TK_KW_DEFERRED},
     {"slash_on",   8, TK_KW_SLASH_ON},
     {"protocol",   8, TK_KW_PROTOCOL},
     {"consensus",  9, TK_KW_CONSENSUS},
@@ -375,6 +380,11 @@ const char *token_kind_name(TokenKind kind) {
     case TK_KW_TRUE:      return "KW_TRUE";
     case TK_KW_FALSE:     return "KW_FALSE";
     case TK_KW_NULL:      return "KW_NULL";
+    case TK_KW_EVENT:     return "KW_EVENT";
+    case TK_KW_PURE:      return "KW_PURE";
+    case TK_KW_VIEW:      return "KW_VIEW";
+    case TK_KW_WITH:      return "KW_WITH";
+    case TK_KW_DEFERRED:  return "KW_DEFERRED";
     case TK_LBRACE:       return "LBRACE";
     case TK_RBRACE:       return "RBRACE";
     case TK_LPAREN:       return "LPAREN";

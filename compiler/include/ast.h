@@ -27,6 +27,7 @@ typedef enum {
     AST_SUBSYSTEM_ASSIGN,  /* consensus: Tendermint<...>  (inside a chain {}) */
     AST_STATE_DECL,        /* state name: Type                                */
     AST_GAS_DECL,          /* gas name = { ... }                              */
+    AST_EVENT_DECL,        /* event name(params)                              */
     AST_FN_DECL,           /* fn name(params) -> Return { body }              */
     AST_FN_PARAM,          /* a single `name: Type` parameter                 */
     AST_EFFECT_DECL,       /* effect name(params) -> Return                   */
@@ -49,13 +50,26 @@ typedef enum {
     AST_EXPR_CALL,         /* f(args)                                          */
     AST_EXPR_INDEX,        /* a[b]                                             */
     AST_EXPR_BLOCK,        /* { stmts; ... }                                   */
+    AST_EXPR_RECORD,       /* { key: value, ... }                              */
+    AST_RECORD_FIELD,      /* a single `key: value` inside a record literal    */
 
     /* statements */
     AST_STMT_LET,          /* let name = expr                                  */
     AST_STMT_RETURN,       /* return expr                                      */
     AST_STMT_IF,           /* if cond { ... } else { ... }                     */
+    AST_STMT_MATCH,        /* match scrutinee { pat => body, ... }             */
+    AST_MATCH_ARM,         /* a single `pat => body` inside a match            */
     AST_STMT_EXPR          /* an expression used as a statement                */
 } AstKind;
+
+/* Function-declaration modifier as written in source: `pure`, `view`, or
+ * neither. Modifiers participate in effect inference / call-site analysis
+ * later; for now the parser records them faithfully. */
+typedef enum {
+    FN_MOD_NONE = 0,
+    FN_MOD_PURE,
+    FN_MOD_VIEW
+} FnModifier;
 
 typedef struct AstNode AstNode;
 
@@ -101,19 +115,29 @@ typedef struct {
 } FnParam;
 
 typedef struct {
+    FnModifier modifier;  /* pure / view / none */
     StrRef name;
-    AstNode **params; /* each is AST_FN_PARAM */
+    AstNode **params;     /* each is AST_FN_PARAM */
     size_t n_params;
     AstNode *return_type; /* TypeExpr; NULL if absent */
+    StrRef *with_effects; /* effect names from `with [a, b]`; NULL if absent */
+    size_t n_with_effects;
     AstNode *body;        /* AST_EXPR_BLOCK */
 } FnDecl;
 
 typedef struct {
     StrRef name;
-    AstNode **params; /* each is AST_FN_PARAM */
+    AstNode **params;       /* each is AST_FN_PARAM */
     size_t n_params;
-    AstNode *return_type; /* TypeExpr; NULL if absent */
+    AstNode *return_type;   /* TypeExpr; NULL if absent */
+    int is_deferred;        /* trailing `deferred` keyword present */
 } EffectDecl;
+
+typedef struct {
+    StrRef name;
+    AstNode **params;       /* each is AST_FN_PARAM */
+    size_t n_params;
+} EventDecl;
 
 typedef struct {
     StrRef evidence_name;
@@ -189,6 +213,18 @@ typedef struct {
     AstNode *result; /* optional trailing expression; NULL if absent */
 } ExprBlock;
 
+/* A single `key: value` entry inside a record literal. Stored as its own AST
+ * node so spans + diagnostics work uniformly with other field types. */
+typedef struct {
+    StrRef key;
+    AstNode *value; /* expression */
+} RecordField;
+
+typedef struct {
+    AstNode **fields; /* each is AST_RECORD_FIELD */
+    size_t n_fields;
+} ExprRecord;
+
 typedef struct {
     StrRef name;
     AstNode *type;  /* optional TypeExpr; NULL if inferred */
@@ -204,6 +240,19 @@ typedef struct {
     AstNode *then_branch; /* AST_EXPR_BLOCK */
     AstNode *else_branch; /* AST_EXPR_BLOCK or AST_STMT_IF, may be NULL */
 } StmtIf;
+
+/* A single `pattern => body` clause inside a match. Patterns are full
+ * expressions today; pattern grammar is its own RFC. */
+typedef struct {
+    AstNode *pattern; /* expression used as pattern */
+    AstNode *body;    /* expression evaluated when the pattern matches */
+} MatchArm;
+
+typedef struct {
+    AstNode *scrutinee; /* expression being matched on */
+    AstNode **arms;     /* each is AST_MATCH_ARM */
+    size_t n_arms;
+} StmtMatch;
 
 typedef struct {
     AstNode *expr;
@@ -221,6 +270,7 @@ struct AstNode {
         SubsystemAssign subsystem;
         StateDecl       state;
         GasDecl         gas;
+        EventDecl       event;
         FnDecl          fn;
         FnParam         fn_param;
         EffectDecl      effect;
@@ -238,9 +288,13 @@ struct AstNode {
         ExprCall        call;
         ExprIndex       index;
         ExprBlock       block;
+        ExprRecord      record;
+        RecordField     record_field;
         StmtLet         let_stmt;
         StmtReturn      ret_stmt;
         StmtIf          if_stmt;
+        StmtMatch       match_stmt;
+        MatchArm        match_arm;
         StmtExpr        expr_stmt;
     } as;
 };
