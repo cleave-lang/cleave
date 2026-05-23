@@ -30,6 +30,7 @@ const char *ast_kind_name(AstKind kind) {
     case AST_SUBSYSTEM_ASSIGN: return "SubsystemAssign";
     case AST_STATE_DECL:       return "StateDecl";
     case AST_GAS_DECL:         return "GasDecl";
+    case AST_EVENT_DECL:       return "EventDecl";
     case AST_FN_DECL:          return "FnDecl";
     case AST_FN_PARAM:         return "FnParam";
     case AST_EFFECT_DECL:      return "EffectDecl";
@@ -48,9 +49,13 @@ const char *ast_kind_name(AstKind kind) {
     case AST_EXPR_CALL:        return "ExprCall";
     case AST_EXPR_INDEX:       return "ExprIndex";
     case AST_EXPR_BLOCK:       return "ExprBlock";
+    case AST_EXPR_RECORD:      return "ExprRecord";
+    case AST_RECORD_FIELD:     return "RecordField";
     case AST_STMT_LET:         return "StmtLet";
     case AST_STMT_RETURN:      return "StmtReturn";
     case AST_STMT_IF:          return "StmtIf";
+    case AST_STMT_MATCH:       return "StmtMatch";
+    case AST_MATCH_ARM:        return "MatchArm";
     case AST_STMT_EXPR:        return "StmtExpr";
     }
     return "Unknown";
@@ -142,11 +147,31 @@ void ast_dump(const AstNode *node, FILE *out, int indent) {
         put_field_child(out, sub, "value", g->value);
         return;
     }
+    case AST_EVENT_DECL: {
+        const EventDecl *e = &node->as.event;
+        put_field_strref(out, sub, "name", e->name);
+        put_field_children(out, sub, "params", e->params, e->n_params);
+        return;
+    }
     case AST_FN_DECL: {
         const FnDecl *f = &node->as.fn;
+        if (f->modifier != FN_MOD_NONE) {
+            put_indent(out, sub);
+            fprintf(out, "modifier: %s\n",
+                    f->modifier == FN_MOD_PURE ? "pure" : "view");
+        }
         put_field_strref(out, sub, "name", f->name);
         put_field_children(out, sub, "params", f->params, f->n_params);
         if (f->return_type) put_field_child(out, sub, "return_type", f->return_type);
+        if (f->n_with_effects > 0) {
+            put_indent(out, sub);
+            fprintf(out, "with_effects: [%zu]\n", f->n_with_effects);
+            for (size_t i = 0; i < f->n_with_effects; ++i) {
+                put_indent(out, sub + 2);
+                put_strref(out, f->with_effects[i]);
+                fputc('\n', out);
+            }
+        }
         put_field_child(out, sub, "body", f->body);
         return;
     }
@@ -161,6 +186,10 @@ void ast_dump(const AstNode *node, FILE *out, int indent) {
         put_field_strref(out, sub, "name", e->name);
         put_field_children(out, sub, "params", e->params, e->n_params);
         if (e->return_type) put_field_child(out, sub, "return_type", e->return_type);
+        if (e->is_deferred) {
+            put_indent(out, sub);
+            fputs("deferred: true\n", out);
+        }
         return;
     }
     case AST_SLASH_ON_DECL: {
@@ -242,6 +271,17 @@ void ast_dump(const AstNode *node, FILE *out, int indent) {
         if (b->result) put_field_child(out, sub, "result", b->result);
         return;
     }
+    case AST_EXPR_RECORD: {
+        const ExprRecord *r = &node->as.record;
+        put_field_children(out, sub, "fields", r->fields, r->n_fields);
+        return;
+    }
+    case AST_RECORD_FIELD: {
+        const RecordField *f = &node->as.record_field;
+        put_field_strref(out, sub, "key", f->key);
+        put_field_child(out, sub, "value", f->value);
+        return;
+    }
     case AST_STMT_LET: {
         const StmtLet *s = &node->as.let_stmt;
         put_field_strref(out, sub, "name", s->name);
@@ -259,6 +299,18 @@ void ast_dump(const AstNode *node, FILE *out, int indent) {
         put_field_child(out, sub, "cond", i->cond);
         put_field_child(out, sub, "then", i->then_branch);
         if (i->else_branch) put_field_child(out, sub, "else", i->else_branch);
+        return;
+    }
+    case AST_STMT_MATCH: {
+        const StmtMatch *m = &node->as.match_stmt;
+        put_field_child(out, sub, "scrutinee", m->scrutinee);
+        put_field_children(out, sub, "arms", m->arms, m->n_arms);
+        return;
+    }
+    case AST_MATCH_ARM: {
+        const MatchArm *a = &node->as.match_arm;
+        put_field_child(out, sub, "pattern", a->pattern);
+        put_field_child(out, sub, "body", a->body);
         return;
     }
     case AST_STMT_EXPR: {

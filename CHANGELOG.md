@@ -6,6 +6,16 @@ Prose references a version as `v0.X.Y`; headings stay bare `[0.X.Y]`.
 
 ## [Unreleased]
 
+### Added
+
+- Parser coverage extended from chain manifests only to the full grammar surface that ships in `tree-sitter-cleave`: module declarations, protocol declarations with `implements` and `slash_on`, function declarations with optional `pure`/`view` modifier and `with [effects]` clause, event and effect declarations (including trailing `deferred`), state and gas declarations, record literals `{ key: value, ... }`, full expression grammar with precedence climbing (binary, unary, call, index, member, path, percent, parenthesized), block expressions with optional trailing expression, statements (`let` with optional type annotation, `return`, `if`/`else` chains, `match` with arms, expression statements). Lands the productions issue #35 tracks.
+- `parser_parse_program` as the new top-level entry; `parser_parse_expression` exposed for tests. `cleavec --ast` now accepts files with `chain`, `module`, and `protocol` declarations at the top level.
+- New keywords recognized by the lexer: `pure`, `view`, `with`, `deferred`, `event`.
+- AST node kinds added: `AST_EVENT_DECL`, `AST_EXPR_RECORD`, `AST_RECORD_FIELD`, `AST_STMT_MATCH`, `AST_MATCH_ARM`. `FnDecl` extended with `modifier` and `with_effects`; `EffectDecl` extended with `is_deferred`.
+- Parser test suite grew from 47 to 149 assertions covering the new productions.
+- Parser bench gains `parse_counter_module` and `parse_protocol_body` cases on realistic source.
+- `spec/grammar.ebnf` rewritten to document the full surface; remaining planned items (closures, unit type, struct-literal shorthand, nested subsystem blocks) listed at the bottom for future issues.
+
 ## [0.1.0] - 2026-05-22
 
 First tagged release. The compiler can lex and parse a chain manifest into an AST. No codegen or runtime yet; those land in subsequent milestones.

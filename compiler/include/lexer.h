@@ -38,6 +38,11 @@ typedef enum {
     TK_KW_TRUE,
     TK_KW_FALSE,
     TK_KW_NULL,
+    TK_KW_EVENT,
+    TK_KW_PURE,
+    TK_KW_VIEW,
+    TK_KW_WITH,
+    TK_KW_DEFERRED,
 
     /* single-character punctuation */
     TK_LBRACE,    /* { */
