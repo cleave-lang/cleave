@@ -4,9 +4,11 @@
 
 #include "ast.h"
 #include "cleave.h"
+#include "codegen.h"
 #include "lexer.h"
 #include "parser.h"
 #include "typecheck.h"
+#include "wasm.h"
 
 static void usage(const char *prog) {
     fprintf(stderr,
@@ -15,8 +17,9 @@ static void usage(const char *prog) {
             "  %s --help\n"
             "  %s --tokens <file.cv>\n"
             "  %s --ast <file.cv>\n"
-            "  %s --check <file.cv>\n",
-            prog, prog, prog, prog, prog);
+            "  %s --check <file.cv>\n"
+            "  %s --emit-wasm <file.cv> [-o <out.wasm>]\n",
+            prog, prog, prog, prog, prog, prog);
 }
 
 static char *read_file(const char *path) {
@@ -126,6 +129,58 @@ static int cmd_check(const char *path) {
     return rc;
 }
 
+/* `--emit-wasm <file.cv> [-o <out.wasm>]`. With no -o, writes the binary
+ * to stdout (handy for `cleavec --emit-wasm x.cv | wasm-validate -`). */
+static int cmd_emit_wasm(const char *path, const char *out_path) {
+    char *source = read_file(path);
+    if (!source) return 1;
+
+    Lexer lex;
+    lexer_init(&lex, source);
+
+    Parser parser;
+    parser_init(&parser, &lex);
+
+    AstNode *program = parser_parse_program(&parser);
+    if (!program || parser_had_error(&parser)) {
+        free(source);
+        return 1;
+    }
+
+    TypeChecker tc;
+    typecheck_init(&tc, stderr);
+    if (typecheck_program(&tc, program) != 0) {
+        free(source);
+        return 1;
+    }
+
+    Codegen cg;
+    cg_init(&cg, stderr);
+    WasmBuf bin;
+    if (cg_compile_program(&cg, program, &bin) != CG_OK) {
+        free(source);
+        return 1;
+    }
+
+    FILE *out = stdout;
+    if (out_path) {
+        out = fopen(out_path, "wb");
+        if (!out) {
+            fprintf(stderr, "error: cannot open '%s' for writing\n", out_path);
+            wasm_free(&bin);
+            free(source);
+            return 1;
+        }
+    }
+    size_t written = fwrite(bin.data, 1, bin.len, out);
+    if (out_path) fclose(out);
+
+    int rc = (written == bin.len) ? 0 : 1;
+    wasm_free(&bin);
+    free(source);
+    return rc;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         usage(argv[0]);
@@ -167,6 +222,23 @@ int main(int argc, char **argv) {
             return 1;
         }
         return cmd_check(argv[2]);
+    }
+
+    if (strcmp(argv[1], "--emit-wasm") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "error: --emit-wasm requires a file argument\n");
+            usage(argv[0]);
+            return 1;
+        }
+        const char *src_path = argv[2];
+        const char *out_path = NULL;
+        for (int i = 3; i < argc - 1; ++i) {
+            if (strcmp(argv[i], "-o") == 0) {
+                out_path = argv[i + 1];
+                break;
+            }
+        }
+        return cmd_emit_wasm(src_path, out_path);
     }
 
     fprintf(stderr,
