@@ -10,23 +10,24 @@ Wasmtime-backed execution engine for Cleave-compiled WASM modules. First piece o
 +-------------+      | (C compiler)  |      +-----------------+
                      +---------------+              |
                                                     v
-                                             +------+------+
-                                             | cleave-     |
-                                             | runtime     |
-                                             | (Wasmtime)  |
-                                             +-------------+
++-----------+                                +------+------+
+| Solidity  | ---> compile ---> .evm bytes  |  cleave-    |
+| / hex     |                               |  runtime    |
++-----------+                               | (Wasmtime + |
+                                            |    REVM)    |
+                                            +-------------+
 ```
 
-The runtime:
+The runtime hosts two execution engines side by side:
 
-- Configures Wasmtime with a determinism-friendly feature set (no SIMD, no relaxed-SIMD).
-- Links the four `env`-namespace hostcalls documented in [`spec/abi/wasm.md`](../spec/abi/wasm.md): `state_get`, `state_set`, `gas_consume`, `event_emit`.
-- Backs hostcalls with per-instance state owned by Wasmtime's `Store`.
-- Exposes a small Rust API (`Runtime`, `Instance`) and a thin CLI binary (`cleave-run`).
+- **Wasmtime** for Cleave-compiled WASM modules. Configured with a determinism-friendly feature set (no SIMD, no relaxed-SIMD). Links the four `env`-namespace hostcalls documented in [`spec/abi/wasm.md`](../spec/abi/wasm.md): `state_get`, `state_set`, `gas_consume`, `event_emit`. State is owned by Wasmtime's `Store`.
+- **REVM** for Solidity / EVM bytecode. Configured for the Cancun hardfork over an in-memory `CacheDB`. Lets a chain manifest declare `exec: EVM<runtime=REVM>` and execute Solidity contracts on the same runtime layer. v0.3 issue #19 lands the engine; cross-VM state sharing with the WASM engine is a separate future issue.
 
-## Why Wasmtime
+Both engines expose a small Rust API and share the `cleave-run` CLI.
 
-Mature, fast AOT, used in production by Fastly, Cosmonic, others. Cleave's runtime layer is small (~250 lines today); swapping engines later if needed is straightforward, but Wasmtime is the right starting bet.
+## Why these two engines
+
+Wasmtime: mature, fast AOT, used in production by Fastly, Cosmonic. REVM: the Rust EVM used by Reth, fastest production EVM implementation. Cleave's runtime layer stays a thin wrapper over each; swapping either later is straightforward, but these are the right starting bets.
 
 ## Layout
 
@@ -53,6 +54,8 @@ Wasmtime + Cranelift pull in a fair amount of code (≈170 crates on first build
 
 ## Running
 
+WASM (Cleave-compiled):
+
 ```
 # Compile a Cleave source file first
 make -C ../compiler
@@ -69,6 +72,18 @@ cargo run --release --bin cleave-run -- /tmp/counter.wasm --calls increment incr
 #   increment = 2
 #   increment = 3
 #   read = 3
+```
+
+EVM (Solidity / hand-crafted bytecode):
+
+```
+# Hand-crafted counter contract: increments slot 0, returns the new value
+cargo run --release --bin cleave-run -- --evm 0x60005460010180600055600052602060 00f3 --calls 3
+# prints:
+#   call 1 = 0x0000000000000000000000000000000000000000000000000000000000000001
+#   call 2 = 0x0000000000000000000000000000000000000000000000000000000000000002
+#   call 3 = 0x0000000000000000000000000000000000000000000000000000000000000003
+#   storage[0] = 3
 ```
 
 ## Testing
@@ -88,22 +103,29 @@ cargo run --release --bin cleave-runtime-bench
 Output (Apple M3 Pro, indicative):
 
 ```
-BENCH name=load_counter_module iters=1472 ops_per_sec=2902
-BENCH name=call_increment_hot iters=3959680 ops_per_sec=7919280
-BENCH name=call_read_hot iters=4650944 ops_per_sec=9301840
+BENCH name=load_counter_module     iters=2368    ops_per_sec=4667
+BENCH name=call_increment_hot      iters=5308928 ops_per_sec=10617849
+BENCH name=call_read_hot           iters=5097280 ops_per_sec=10194480
+BENCH name=evm_load_counter        iters=295040  ops_per_sec=589991
+BENCH name=evm_call_increment_hot  iters=591744  ops_per_sec=1183398
 ```
 
-`call_increment_hot` is the hot-path execution number: Wasmtime dispatching one exported function that does a state read, an add, and a state write. **~7.9 million ops/sec** on this hardware. Well above the 10k TPS minimum target documented in the repo's CLAUDE.md.
+`call_increment_hot` is the WASM hot-path number: Wasmtime dispatching one exported function that does a state read, an add, and a state write. **~10.6 million ops/sec.** `evm_call_increment_hot` is the same semantic operation on the EVM engine: **~1.18 million ops/sec**, ~9x slower than WASM but still ~100x above the 10k TPS minimum target.
+
+Module load is asymmetric because Wasmtime AOT-compiles on `Runtime::load` (slow once, fast forever), whereas REVM keeps an interpreter so install is cheap but per-instruction dispatch is more expensive.
 
 These numbers reflect raw VM dispatch only. Real chain throughput will be bound by consensus latency, gas metering granularity, and storage commit cost, none of which exist yet. The point is that the runtime layer is not the bottleneck.
 
 ## What this runtime does not yet do
 
 - Persistence across processes (state is in-memory only)
-- Real gas budgets (`gas_consume` records usage but never aborts)
+- Real gas budgets (`gas_consume` records usage but never aborts; EVM gas is metered by REVM but no budget enforcement at the cross-engine level)
 - Event payloads serialized from module memory beyond raw byte copy
 - Multiple modules sharing state
 - Cross-module calls
+- **Cross-engine state sharing**: WASM modules and EVM contracts each have their own state today. A Cleave module calling a Solidity contract on the same chain (or vice versa) requires a shared state backend; that's its own future issue.
+- ERC-20 / standard Solidity contract deployment via `solc` toolchain (the EVM engine accepts raw bytecode today; the toolchain layer is the next step)
+- JSON-RPC layer for `eth_sendRawTransaction` and friends
 - Integration with a consensus layer
 
-Each of these is its own future issue. The current runtime is the minimum that makes a Cleave-compiled module actually run.
+Each of these is its own future issue. The current runtime is the minimum that makes a Cleave-compiled module AND a Solidity-compiled EVM module both actually run.

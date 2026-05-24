@@ -17,7 +17,8 @@
 
 use std::time::{Duration, Instant};
 
-use cleave_runtime::Runtime;
+use cleave_runtime::evm::{Address, Bytes, U256};
+use cleave_runtime::{Evm, Runtime};
 
 /// Counter MVP, byte-identical to the snapshot embedded in lib.rs tests.
 /// Regenerate with `cleavec --emit-wasm examples/counter-mvp.cv`.
@@ -86,6 +87,38 @@ fn main() {
         let _ = instance.call("increment", &[]).unwrap();
         bench("call_read_hot", window, || {
             let _ = instance.call("read", &[]).unwrap();
+        });
+    }
+
+    // ---- EVM benches (issue #19) ----
+    //
+    // The same counter-shaped contract, hand-crafted EVM bytecode:
+    // every call increments storage slot 0 and returns the new value.
+    // Lets us measure the WASM-vs-EVM dispatch gap on identical
+    // semantic operations.
+    const EVM_COUNTER: &[u8] = &[
+        0x60, 0x00, 0x54, 0x60, 0x01, 0x01, 0x80,
+        0x60, 0x00, 0x55, 0x60, 0x00, 0x52,
+        0x60, 0x20, 0x60, 0x00, 0xF3,
+    ];
+    let counter_addr: Address = "0xc0ffee0000000000000000000000000000000001"
+        .parse()
+        .expect("static address literal parses");
+    let caller_addr: Address = "0x000000000000000000000000000000000000fa11"
+        .parse()
+        .expect("static address literal parses");
+
+    bench("evm_load_counter", window, || {
+        let mut evm = Evm::new();
+        evm.install(counter_addr, EVM_COUNTER.to_vec());
+    });
+
+    {
+        let mut evm = Evm::new();
+        evm.fund(caller_addr, U256::from(10_000_000_000_000_000_000u128));
+        evm.install(counter_addr, EVM_COUNTER.to_vec());
+        bench("evm_call_increment_hot", window, || {
+            let _ = evm.call(caller_addr, counter_addr, Bytes::new()).unwrap();
         });
     }
 }
