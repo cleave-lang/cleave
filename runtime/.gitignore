@@ -1,0 +1,4 @@
+target/
+# Cargo.lock is committed: this crate ships a binary (`cleave-run`),
+# and a committed lockfile gives CI and downstream builds a
+# reproducible Wasmtime + Cranelift snapshot to compile against.

@@ -1,0 +1,37 @@
+[package]
+name = "cleave-runtime"
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0"
+description = "Wasmtime-backed execution engine for Cleave-compiled WASM modules."
+repository = "https://github.com/cleave-lang/cleave"
+readme = "README.md"
+publish = false
+# We provide our own bench binary; turn off cargo's auto-discovery of
+# `benches/*.rs` as `[bench]` targets so the file is owned only by the
+# `[[bin]]` entry below.
+autobenches = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "cleave-run"
+path = "src/main.rs"
+
+# Hand-rolled microbenchmark binary. Matches the `BENCH name=X iters=N
+# ops_per_sec=M` line format used by the C-side benches so CI logs can
+# be diffed across both halves of the project without per-tool parsing.
+[[bin]]
+name = "cleave-runtime-bench"
+path = "benches/runtime_bench.rs"
+
+[dependencies]
+# Wasmtime is the only non-stdlib dependency. The runtime intentionally
+# avoids extra crates so the dependency tree stays small and auditable.
+wasmtime = { version = "26", default-features = false, features = ["cranelift", "runtime"] }
+anyhow   = "1"
+
+[dev-dependencies]
+# Used by integration tests to compile counter-mvp.cv via cleavec.
+# No special features; cleavec is shelled out as a subprocess.
