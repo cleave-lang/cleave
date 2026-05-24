@@ -28,6 +28,9 @@ use std::collections::HashMap;
 use anyhow::{anyhow, Context, Result};
 use wasmtime::{Caller, Config, Engine, Linker, Module, Store, Val};
 
+pub mod evm;
+pub use evm::Evm;
+
 /// Per-instance host-side state. Owned by Wasmtime's `Store`, accessed
 /// by hostcalls via [`Caller::data_mut`].
 #[derive(Default)]

@@ -27,9 +27,11 @@ name = "cleave-runtime-bench"
 path = "benches/runtime_bench.rs"
 
 [dependencies]
-# Wasmtime is the only non-stdlib dependency. The runtime intentionally
-# avoids extra crates so the dependency tree stays small and auditable.
+# Wasmtime is the WASM execution engine for Cleave-compiled modules.
 wasmtime = { version = "26", default-features = false, features = ["cranelift", "runtime"] }
+# REVM is the EVM execution engine for Solidity contracts deployed to
+# chains built with Cleave. Used by Reth, well-maintained, fast.
+revm     = { version = "40" }
 anyhow   = "1"
 
 [dev-dependencies]
