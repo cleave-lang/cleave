@@ -6,6 +6,7 @@
 #include "cleave.h"
 #include "lexer.h"
 #include "parser.h"
+#include "typecheck.h"
 
 static void usage(const char *prog) {
     fprintf(stderr,
@@ -13,8 +14,9 @@ static void usage(const char *prog) {
             "  %s --version\n"
             "  %s --help\n"
             "  %s --tokens <file.cv>\n"
-            "  %s --ast <file.cv>\n",
-            prog, prog, prog, prog);
+            "  %s --ast <file.cv>\n"
+            "  %s --check <file.cv>\n",
+            prog, prog, prog, prog, prog);
 }
 
 static char *read_file(const char *path) {
@@ -100,6 +102,30 @@ static int cmd_ast(const char *path) {
     return 0;
 }
 
+static int cmd_check(const char *path) {
+    char *source = read_file(path);
+    if (!source) return 1;
+
+    Lexer lex;
+    lexer_init(&lex, source);
+
+    Parser parser;
+    parser_init(&parser, &lex);
+
+    AstNode *program = parser_parse_program(&parser);
+    if (!program || parser_had_error(&parser)) {
+        free(source);
+        return 1;
+    }
+
+    TypeChecker tc;
+    typecheck_init(&tc, stderr);
+    int rc = typecheck_program(&tc, program);
+    /* AST + types are leaked intentionally; process exits next. */
+    free(source);
+    return rc;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         usage(argv[0]);
@@ -132,6 +158,15 @@ int main(int argc, char **argv) {
             return 1;
         }
         return cmd_ast(argv[2]);
+    }
+
+    if (strcmp(argv[1], "--check") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "error: --check requires a file argument\n");
+            usage(argv[0]);
+            return 1;
+        }
+        return cmd_check(argv[2]);
     }
 
     fprintf(stderr,

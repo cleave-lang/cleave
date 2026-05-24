@@ -73,6 +73,11 @@ typedef enum {
 
 typedef struct AstNode AstNode;
 
+/* Forward-declared so AstNode can carry a typecheck slot without pulling
+ * the type-checker header into every AST consumer. The actual Type
+ * definition lives in compiler/include/typecheck.h. */
+struct Type;
+
 /* ============== per-kind payloads ============== */
 
 typedef struct {
@@ -263,6 +268,10 @@ typedef struct {
 struct AstNode {
     AstKind kind;
     Span span;
+    /* Filled in by the type checker for expression-bearing nodes.
+     * NULL until typecheck runs; remains NULL on non-expression nodes
+     * and on expressions whose type the checker could not resolve. */
+    const struct Type *resolved_type;
     union {
         ChainDecl       chain;
         ModuleDecl      module;
