@@ -6,6 +6,10 @@ Prose references a version as `v0.X.Y`; headings stay bare `[0.X.Y]`.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-24
+
+The "Multi-VM execution" release. Cleave is end-to-end now: write a `.cv` file, compile to WASM with `cleavec`, run it on the Wasmtime-backed runtime with state persisting across calls. The same runtime also embeds REVM, so Solidity-compiled EVM bytecode runs alongside Cleave-compiled WASM modules. Both engines clear the project's 10 K TPS minimum target by orders of magnitude on hot-path microbenches.
+
 ### Added
 
 - EVM execution engine in the runtime crate (`runtime/src/evm.rs`). Embeds REVM 40 alongside the existing Wasmtime engine so a chain manifest can declare `exec: EVM<runtime=REVM>` and execute Solidity-compiled bytecode without changing application code. Configured for the Cancun hardfork over REVM's in-memory `CacheDB`. Public API: `Evm::new`, `Evm::fund`, `Evm::install` (write bytecode directly to an address), `Evm::deploy` (standard CREATE), `Evm::call`, `Evm::storage`. Re-exports `Address`, `Bytes`, `U256`, `StorageKey`, `StorageValue` from REVM so downstream callers do not need a direct REVM dependency. Lands the core of issue #19.

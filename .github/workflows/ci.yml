@@ -29,7 +29,7 @@ jobs:
         run: |
           out=$(./compiler/build/cleavec --version)
           echo "stdout: $out"
-          echo "$out" | grep -q "cleavec 0.1.0" || { echo "version output unexpected"; exit 1; }
+          echo "$out" | grep -q "cleavec 0.3.0" || { echo "version output unexpected"; exit 1; }
 
       - name: Test
         run: make -C compiler test
