@@ -1,0 +1,24 @@
+// Minimum counter module for the v0.3 WASM codegen.
+//
+// Identical in spirit to `counter.cv` but drops the `Result<u64>`
+// return wrapper. Sum types like `Result` and `Option` need a tag +
+// payload memory layout that the v0.3 codegen does not yet have;
+// that lands with a follow-up issue.
+//
+// The hostcall ABI this compiles against lives in
+// `spec/abi/wasm.md`. Loading the output into the v0.3 runtime
+// (issue #18) and calling `increment` adds 1 to the persistent
+// `count` slot.
+
+module Counter {
+    state count: u64
+
+    fn increment() -> u64 {
+        count = count + 1
+        count
+    }
+
+    fn read() -> u64 {
+        count
+    }
+}
