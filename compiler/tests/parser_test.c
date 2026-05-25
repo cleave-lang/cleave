@@ -228,12 +228,33 @@ TEST(test_error_missing_colon_in_assignment) {
     free(err);
 }
 
-TEST(test_error_unknown_subsystem_key) {
-    /* `unknown:` lexes as IDENT, not one of the SUBSYSTEM keywords. */
+TEST(test_arbitrary_subsystem_key_parses) {
+    /* Issue #64: subsystem keys are no longer restricted to the five
+     * stdlib axes. Any identifier is a valid subsystem key so chains
+     * can declare custom axes (privacy, mev, da-variant, etc.). */
     char *err = NULL;
-    AstNode *root = parse_source("chain C { unknown: Tendermint }", &err);
-    ASSERT(root == NULL);
-    ASSERT(err && strstr(err, "expected a subsystem key") != NULL);
+    AstNode *root = parse_source(
+        "chain C { privacy: GrothProver<curve=BN254> }", &err);
+    ASSERT(root != NULL);
+    ASSERT_EQ_INT(root->kind, AST_CHAIN_DECL);
+    ASSERT_EQ_INT(root->as.chain.n_assignments, 1);
+    AstNode *sub = root->as.chain.assignments[0];
+    ASSERT_EQ_INT(sub->kind, AST_SUBSYSTEM_ASSIGN);
+    ASSERT_EQ_STR_LEN(sub->as.subsystem.key.start,
+                      sub->as.subsystem.key.length, "privacy");
+    free(err);
+}
+
+TEST(test_subsystem_key_can_still_be_stdlib_keyword) {
+    /* Regression guard: the five reserved keyword tokens still work
+     * as subsystem keys, since state/gas remain keywords for the
+     * module-item declarations elsewhere in the grammar. */
+    char *err = NULL;
+    AstNode *root = parse_source("chain C { consensus: Aura }", &err);
+    ASSERT(root != NULL);
+    AstNode *sub = root->as.chain.assignments[0];
+    ASSERT_EQ_STR_LEN(sub->as.subsystem.key.start,
+                      sub->as.subsystem.key.length, "consensus");
     free(err);
 }
 
@@ -590,7 +611,8 @@ int main(void) {
     RUN(test_error_missing_open_brace);
     RUN(test_error_missing_close_brace);
     RUN(test_error_missing_colon_in_assignment);
-    RUN(test_error_unknown_subsystem_key);
+    RUN(test_arbitrary_subsystem_key_parses);
+    RUN(test_subsystem_key_can_still_be_stdlib_keyword);
     RUN(test_error_missing_type_expr_after_colon);
     RUN(test_error_unterminated_generic_args);
 
