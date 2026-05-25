@@ -244,6 +244,113 @@ TEST(test_continues_after_first_error) {
     free(err);
 }
 
+/* ============== move tracking (RFC 0001 Phase 1) ============== */
+
+TEST(test_copy_type_can_be_used_repeatedly) {
+    /* Primitives are Copy; using `x` multiple times is fine. */
+    const char *src =
+        "module M {\n"
+        "  fn f() -> u64 { let x: u64 = 42; let y: u64 = x; let z: u64 = x; z }\n"
+        "}";
+    int errors = 0;
+    char *err = NULL;
+    ASSERT(run_check(src, &errors, &err));
+    ASSERT_EQ_INT(errors, 0);
+    free(err);
+}
+
+TEST(test_non_copy_use_after_move_in_let_errors) {
+    /* `make_result` returns Result<u64> which is TY_GENERIC -> non-Copy.
+     * `let y = r` moves r; the subsequent `let z = r` reads a moved
+     * value and should error. */
+    const char *src =
+        "module M {\n"
+        "  fn make() -> Result<u64> { make() }\n"
+        "  fn use_twice() -> Result<u64> {\n"
+        "    let r: Result<u64> = make()\n"
+        "    let y: Result<u64> = r\n"
+        "    let z: Result<u64> = r\n"
+        "    z\n"
+        "  }\n"
+        "}";
+    int errors = 0;
+    char *err = NULL;
+    ASSERT(run_check(src, &errors, &err));
+    ASSERT(errors >= 1);
+    ASSERT(err && strstr(err, "use of moved value 'r'") != NULL);
+    free(err);
+}
+
+TEST(test_non_copy_use_after_move_via_call_errors) {
+    /* Passing r to take(r) moves it; subsequent reference errors. */
+    const char *src =
+        "module M {\n"
+        "  fn make() -> Result<u64> { make() }\n"
+        "  fn take(r: Result<u64>) -> u64 { 0 }\n"
+        "  fn use_then_call() -> Result<u64> {\n"
+        "    let r: Result<u64> = make()\n"
+        "    let _: u64 = take(r)\n"
+        "    r\n"
+        "  }\n"
+        "}";
+    int errors = 0;
+    char *err = NULL;
+    ASSERT(run_check(src, &errors, &err));
+    ASSERT(errors >= 1);
+    ASSERT(err && strstr(err, "use of moved value 'r'") != NULL);
+    free(err);
+}
+
+TEST(test_non_copy_single_use_is_fine) {
+    /* Moving once is the happy path; only the second use should error. */
+    const char *src =
+        "module M {\n"
+        "  fn make() -> Result<u64> { make() }\n"
+        "  fn ok() -> Result<u64> {\n"
+        "    let r: Result<u64> = make()\n"
+        "    r\n"
+        "  }\n"
+        "}";
+    int errors = 0;
+    char *err = NULL;
+    ASSERT(run_check(src, &errors, &err));
+    ASSERT_EQ_INT(errors, 0);
+    free(err);
+}
+
+TEST(test_copy_after_move_irrelevant) {
+    /* `x: u64` is Copy. Both `let y = x` and the later read of `x` are
+     * value copies; nothing moves. No diagnostic should fire even
+     * though syntactically this looks like a use-after-move pattern. */
+    const char *src =
+        "module M {\n"
+        "  fn read(x: u64) -> u64 { x }\n"
+        "  fn caller() -> u64 {\n"
+        "    let x: u64 = 5\n"
+        "    let y: u64 = x\n"
+        "    let z: u64 = x\n"
+        "    read(x)\n"
+        "  }\n"
+        "}";
+    int errors = 0;
+    char *err = NULL;
+    ASSERT(run_check(src, &errors, &err));
+    ASSERT_EQ_INT(errors, 0);
+    free(err);
+}
+
+TEST(test_type_is_copy_classification) {
+    /* Direct API test of the Copy classification. */
+    ASSERT_EQ_INT(type_is_copy(type_prim(PRIM_U64)), 1);
+    ASSERT_EQ_INT(type_is_copy(type_prim(PRIM_BOOL)), 1);
+    ASSERT_EQ_INT(type_is_copy(type_prim(PRIM_STR)), 1);
+    ASSERT_EQ_INT(type_is_copy(type_unit()), 1);
+    ASSERT_EQ_INT(type_is_copy(type_unknown()), 1);
+    ASSERT_EQ_INT(type_is_copy(NULL), 1);
+    /* No public API for constructing a generic type; covered by the
+     * end-to-end use-after-move tests above. */
+}
+
 int main(void) {
     /* type singletons */
     RUN(test_prim_interning);
@@ -266,6 +373,14 @@ int main(void) {
     RUN(test_call_arity_mismatch);
     RUN(test_call_arg_type_mismatch);
     RUN(test_continues_after_first_error);
+
+    /* move tracking (RFC 0001 Phase 1) */
+    RUN(test_copy_type_can_be_used_repeatedly);
+    RUN(test_non_copy_use_after_move_in_let_errors);
+    RUN(test_non_copy_use_after_move_via_call_errors);
+    RUN(test_non_copy_single_use_is_fine);
+    RUN(test_copy_after_move_irrelevant);
+    RUN(test_type_is_copy_classification);
 
     REPORT();
 }

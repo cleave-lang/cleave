@@ -102,4 +102,19 @@ const Type *type_unknown(void);
  * reused across calls; copy out if you need to keep the string. */
 const char *type_describe(const Type *t);
 
+/* Is this type `Copy`? Copy types can be used freely without losing the
+ * source binding (no move semantics). Per RFC 0001:
+ *   - All primitives (u8..u256, i8..i64, bool, char, str) are Copy.
+ *   - Unit `()` is Copy.
+ *   - Function types are Copy (the reference, not the body).
+ *   - Generic-head aggregates (`Result<u64>`, `Vec<T>`, etc.) are NOT Copy
+ *     by default; they move on use.
+ *   - Unknown is permissively treated as Copy so the checker does not
+ *     spam errors on values it cannot resolve.
+ *
+ * Used by the move-tracker to decide whether a binding's use marks the
+ * binding as moved. Once `&T` references land, this also informs how
+ * borrows compose with moves. */
+int type_is_copy(const Type *t);
+
 #endif /* CLEAVE_TYPECHECK_H */

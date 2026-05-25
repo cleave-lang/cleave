@@ -6,6 +6,13 @@ Prose references a version as `v0.X.Y`; headings stay bare `[0.X.Y]`.
 
 ## [Unreleased]
 
+### Added
+
+- Type-system: `type_is_copy(const Type *)` classification (RFC 0001 Phase 1). Primitives, unit, function types, and unknown are `Copy`; generic-head aggregates (`Result<T>`, `Vec<T>`, etc.) are NOT `Copy`. Public API in `typecheck.h`.
+- Type-system: move tracking for non-`Copy` bindings. Each scope entry carries a `moved` flag; the checker marks bindings as moved when a non-Copy identifier is consumed via `let y = x`, a function call argument, or a return value, then errors `"use of moved value 'x'"` on subsequent reads. Copy types (the entire current language surface in production examples) keep this flag at 0 throughout and see no diagnostic.
+- 6 new typecheck tests covering the move-tracking surface: Copy repeated-use OK, non-Copy use-after-move-in-let errors, non-Copy use-after-move-via-call errors, non-Copy single-use OK, Copy-after-move irrelevant (no false positives on `u64`), direct `type_is_copy` API check.
+- Sets up Phase 1 of the RFC 0001 implementation roadmap. Phases 2-5 (grammar extensions, codegen for heap, stdlib types, `extern host` ABI) still ahead.
+
 ### Changed
 
 - `spec/rfcs/0001-memory-model.md` expanded from open-design to decision-ready proposal. Concrete syntax examples (move semantics, borrows, RAII drop). Resolutions to 7 of 10 originally-open questions (stack vs heap, string layout, collection placement, move-vs-copy default, references, drop, persistent state). 3 questions remain genuinely open (lifetime annotations, custom allocators, async interaction). Counterargument section steelmanning GC / `unsafe` / "C++ with extra steps". Migration path documented (existing examples compile unchanged; impact is on future heap-allocated types). Implementation roadmap split into 5 phases totaling ~3,700 LoC across 5 PRs. Decision criteria added so the RFC has a clear bar for moving from `draft` to `accepted`.
