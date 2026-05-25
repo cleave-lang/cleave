@@ -26,11 +26,15 @@
  *   - state = expr           -> i32.const <slot>; <expr>; call state_set
  *   - local = expr           -> <expr>; local.set <idx>
  *   - module-fn call         -> args...; call <fn index>
+ *   - if / else / else-if    -> <cond>; if; <then>; else; <else>; end (issue #49)
  *   - block trailing expr    -> becomes the function's return value
  *
  * What we deliberately reject
  * ---------------------------
- *   - control flow (if/match/loops) -- see issues #43, #49
+ *   - match (issue #43); loops (no issue yet, deliberate)
+ *   - if-as-expression (`let x = if c { 1 } else { 2 }`): grammar does
+ *     not parse if at expression position today; lift when the parser
+ *     does
  *   - sum types (`Result`, `Option`) -- see issue #48
  *   - identifiers we cannot resolve
  *
@@ -333,6 +337,93 @@ static void emit_call(CodegenCtx *ctx, WasmBuf *body, AstNode *node) {
     wasm_write_leb_u32(body, f->fn_index);
 }
 
+/* Returns 1 if `expr`, when emitted, pushes a value onto the operand
+ * stack.  The only v0 expression that does NOT push is an assignment
+ * (`x = y`), because both state_set (a void hostcall) and local.set
+ * consume the value silently.  Callers use this to decide whether
+ * trailing-expression slots and if-branch results need a `drop` or
+ * fn-body default-zero to balance the stack. */
+static int leaves_value_on_stack(const AstNode *expr) {
+    if (!expr) return 0;
+    if (expr->kind == AST_EXPR_BINARY
+        && expr->as.binary.op.length == 1
+        && expr->as.binary.op.start[0] == '=') {
+        return 0;
+    }
+    return 1;
+}
+
+/* Returns 1 if `node`, when emitted, leaves an i32 on the WASM operand
+ * stack rather than the usual i64. The v0 codegen produces i32 only for
+ * comparison binary operators (i64.eq, i64.lt_u, etc. all return i32
+ * per the WASM spec). Everything else (literals, identifiers, calls,
+ * arithmetic) leaves i64. Used by emit_if to decide whether the cond
+ * value needs an i32.wrap_i64 coercion before the `if` instruction
+ * consumes it. */
+static int leaves_i32_on_stack(const AstNode *node) {
+    if (!node) return 0;
+    if (node->kind != AST_EXPR_BINARY) return 0;
+    StrRef op = node->as.binary.op;
+    if (op.length == 1) {
+        return op.start[0] == '<' || op.start[0] == '>';
+    }
+    if (op.length == 2) {
+        return memcmp(op.start, "==", 2) == 0
+            || memcmp(op.start, "!=", 2) == 0
+            || memcmp(op.start, "<=", 2) == 0
+            || memcmp(op.start, ">=", 2) == 0;
+    }
+    return 0;
+}
+
+static void emit_if(CodegenCtx *ctx, WasmBuf *body, AstNode *node);
+static void emit_block(CodegenCtx *ctx, WasmBuf *body, AstNode *node);
+
+/* Emit one branch of an if statement.  v0 if statements have an empty
+ * block type, so any value the branch leaves on the stack must be
+ * dropped to keep the WASM type checker happy.  When sum types and
+ * if-as-expression land, this layer learns to pass the value through
+ * instead of dropping it. */
+static void emit_if_branch(CodegenCtx *ctx, WasmBuf *body, AstNode *branch) {
+    if (!branch) return;
+    if (branch->kind == AST_EXPR_BLOCK) {
+        emit_block(ctx, body, branch);
+        /* Drop the trailing result so the block produces no value, but
+         * only when the result expression actually pushed something.
+         * Assignments (state_set / local.set) leave the stack empty;
+         * a `drop` there would underflow. */
+        if (leaves_value_on_stack(branch->as.block.result)) {
+            wasm_write_byte(body, WASM_OP_DROP);
+        }
+    } else if (branch->kind == AST_STMT_IF) {
+        /* `else if` chain: nest another if/else/end. */
+        emit_if(ctx, body, branch);
+    }
+}
+
+static void emit_if(CodegenCtx *ctx, WasmBuf *body, AstNode *node) {
+    StmtIf *i = &node->as.if_stmt;
+
+    emit_expr(ctx, body, i->cond);
+    if (!leaves_i32_on_stack(i->cond)) {
+        /* The condition came out as i64 (bool literal, identifier read,
+         * call result, etc.).  WASM `if` expects an i32, so narrow. */
+        wasm_write_byte(body, WASM_OP_I32_WRAP_I64);
+    }
+
+    wasm_write_byte(body, WASM_OP_IF);
+    wasm_write_byte(body, WASM_BLOCKTYPE_EMPTY);
+
+    emit_if_branch(ctx, body, i->then_branch);
+
+    if (i->else_branch) {
+        wasm_write_byte(body, WASM_OP_ELSE);
+        emit_if_branch(ctx, body, i->else_branch);
+    }
+
+    wasm_write_byte(body, WASM_OP_END);
+}
+
 static void emit_block(CodegenCtx *ctx, WasmBuf *body, AstNode *node) {
     ExprBlock *b = &node->as.block;
     for (size_t i = 0; i < b->n_stmts; ++i) {
@@ -374,6 +465,8 @@ static void emit_block(CodegenCtx *ctx, WasmBuf *body, AstNode *node) {
             emit_expr(ctx, body, l->value);
             wasm_write_byte(body, WASM_OP_LOCAL_SET);
             wasm_write_leb_u32(body, bind->local_index);
+        } else if (s->kind == AST_STMT_IF) {
+            emit_if(ctx, body, s);
         } else {
             cg_report(ctx, &s->span,
                       "statement kind %s not yet supported in v0 codegen",
@@ -512,10 +605,14 @@ static void emit_fn_body(CodegenCtx *ctx, AstNode *fn_decl,
     } else {
         emit_block(ctx, body_out, f->body);
         /* If the block has no trailing expression and no return, push a
-         * default 0 so the function's i64 return type is satisfied. */
+         * default 0 so the function's i64 return type is satisfied.
+         * `leaves_value_on_stack` treats an assignment-as-result as
+         * not-a-value, which is the right call here: a fn that ends
+         * with `x = expr` needs the synthetic 0 just like one with no
+         * trailing expression at all. */
         ExprBlock *bb = &f->body->as.block;
         int needs_default = 1;
-        if (bb->result) needs_default = 0;
+        if (leaves_value_on_stack(bb->result)) needs_default = 0;
         for (size_t i = 0; i < bb->n_stmts; ++i) {
             if (bb->stmts[i]->kind == AST_STMT_RETURN) {
                 needs_default = 0;

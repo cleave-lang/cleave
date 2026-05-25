@@ -31,6 +31,22 @@ static const char *ARITHMETIC_HEAVY =
     "  }\n"
     "}";
 
+/* Exercises the if/else codegen path (issue #49): an else-if chain
+ * that drives the cond coercion + nested-if logic. */
+static const char *IF_HEAVY =
+    "module M {\n"
+    "  state x: u64\n"
+    "  fn classify(n: u64) -> u64 {\n"
+    "    if n == 0 { x = 1 }\n"
+    "    else if n == 1 { x = 2 }\n"
+    "    else if n == 2 { x = 3 }\n"
+    "    else if n == 3 { x = 4 }\n"
+    "    else if n == 4 { x = 5 }\n"
+    "    else { x = 6 }\n"
+    "    x\n"
+    "  }\n"
+    "}";
+
 /* Exercises the let-binding codegen path (issue #44): eight local
  * variables, the trailing expression reads several of them. The
  * pre-scan walks 8 stmts; the locals declaration is one i64 group
@@ -82,6 +98,18 @@ int main(void) {
 
     BENCH("codegen_let_heavy", {
         Lexer lex; lexer_init(&lex, LET_HEAVY);
+        Parser p;  parser_init(&p, &lex);
+        AstNode *prog = parser_parse_program(&p);
+        TypeChecker tc; typecheck_init(&tc, DEV_NULL);
+        (void)typecheck_program(&tc, prog);
+        Codegen cg; cg_init(&cg, DEV_NULL);
+        WasmBuf bin;
+        (void)cg_compile_program(&cg, prog, &bin);
+        wasm_free(&bin);
+    });
+
+    BENCH("codegen_if_heavy", {
+        Lexer lex; lexer_init(&lex, IF_HEAVY);
         Parser p;  parser_init(&p, &lex);
         AstNode *prog = parser_parse_program(&p);
         TypeChecker tc; typecheck_init(&tc, DEV_NULL);

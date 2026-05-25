@@ -96,6 +96,10 @@ enum {
 
 /* Opcodes used by Cleave codegen. Names mirror the spec's text format. */
 enum {
+    WASM_OP_BLOCK        = 0x02,
+    WASM_OP_LOOP         = 0x03,
+    WASM_OP_IF           = 0x04,
+    WASM_OP_ELSE         = 0x05,
     WASM_OP_END          = 0x0B,
     WASM_OP_RETURN       = 0x0F,
     WASM_OP_CALL         = 0x10,
@@ -124,7 +128,17 @@ enum {
     WASM_OP_I64_REM_S    = 0x81,
     WASM_OP_I64_REM_U    = 0x82,
     WASM_OP_I64_AND      = 0x83,
-    WASM_OP_I64_OR       = 0x84
+    WASM_OP_I64_OR       = 0x84,
+    WASM_OP_I32_WRAP_I64 = 0xA7   /* drops upper 32 bits of an i64; used to
+                                     coerce a bool-shaped i64 (0/1) into an
+                                     i32 for the if instruction */
+};
+
+/* Block-type byte that immediately follows a block / loop / if instruction.
+ * `empty` means no result on the stack at the end of the block (the only
+ * case the v0 codegen needs since if-as-expression is not yet supported). */
+enum {
+    WASM_BLOCKTYPE_EMPTY = 0x40
 };
 
 /* Export descriptor kinds. */
