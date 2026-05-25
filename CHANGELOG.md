@@ -6,6 +6,13 @@ Prose references a version as `v0.X.Y`; headings stay bare `[0.X.Y]`.
 
 ## [Unreleased]
 
+### Added
+
+- Codegen for `let` bindings (`compiler/src/codegen.c`). The v0.3 codegen rejected `let` with a diagnostic; this lifts the restriction. The fn-body emitter pre-scans the top-level block to count let statements, allocates one WASM local per binding at index `n_params + let_index`, emits a single locals declaration group of N i64s, and lowers each `let name = expr` to `<expr>; local.set <idx>`. Reads of let-bound names go through the existing `local.get` path; assignments to let names route to `local.set`. `find_local` now scans most-recent-first so shadowing matches user expectation. Closes #44.
+- 7 codegen tests (`codegen_test.c`): locals declaration byte sequence, `local.set 0` / `local.get 0` opcodes, post-param local index, three-let single-group declaration, let referencing earlier let, reassignment lowering, regression guard that fn with no lets still emits a zero local-groups byte.
+- `codegen_let_heavy` bench case: 8 let bindings + arithmetic chain.
+- `codegen.c` header doc updated: "let bindings deliberately rejected" moved out, control flow + sum types now reference the issues that track them (#43, #48, #49).
+
 ## [0.3.0] - 2026-05-24
 
 The "Multi-VM execution" release. Cleave is end-to-end now: write a `.cv` file, compile to WASM with `cleavec`, run it on the Wasmtime-backed runtime with state persisting across calls. The same runtime also embeds REVM, so Solidity-compiled EVM bytecode runs alongside Cleave-compiled WASM modules. Both engines clear the project's 10 K TPS minimum target by orders of magnitude on hot-path microbenches.
