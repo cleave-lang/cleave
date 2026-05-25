@@ -80,7 +80,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential
+        # `solc` (Solidity compiler) is needed for the ERC-20 integration
+        # test (tests/solidity.rs). The test skips gracefully if solc is
+        # absent, but CI should exercise the real toolchain.
+        run: sudo apt-get update && sudo apt-get install -y build-essential solc
 
       - name: Build cleavec
         run: make -C compiler

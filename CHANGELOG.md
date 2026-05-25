@@ -8,6 +8,13 @@ Prose references a version as `v0.X.Y`; headings stay bare `[0.X.Y]`.
 
 ### Added
 
+- Solidity toolchain integration. Real `solc`-compiled Solidity contracts now run end-to-end on the EVM engine. `runtime/tests/solidity.rs` shells out to `solc --bin --optimize` to compile `runtime/tests/fixtures/MiniERC20.sol`, deploys via `Evm::deploy` with a 32-byte ABI-encoded constructor arg (`initial supply`), then exercises `balanceOf` and `transfer` via hand-rolled ABI encoding of the standard selectors (`0x70a08231 balanceOf(address)`, `0xa9059cbb transfer(address,uint256)`, `0x18160ddd totalSupply()`). Closes #52.
+- 2 new integration tests:
+  - `erc20_deploys_and_transfers`: deploys MiniERC20 with 1M supply to alice, asserts `totalSupply == 1M`, asserts `balanceOf(alice) == 1M` and `balanceOf(bob) == 0`, transfers 100 from alice to bob, asserts both balances post-transfer
+  - `erc20_transfer_reverts_when_insufficient_balance`: bob (zero balance) attempting to transfer 1 reverts with the expected revert message
+- Both tests skip cleanly if `solc` is not on PATH (same pattern as the `cleavec`-dependent end-to-end test).
+- CI installs `solc` in the runtime job so the Solidity tests exercise the real toolchain on every PR.
+- Runtime README updated: full Solidity workflow documented; the "ERC-20 / standard Solidity contract deployment via solc toolchain" caveat removed from the "what this runtime does not yet do" list.
 - Real gas budget enforcement on the WASM engine (`runtime/src/lib.rs`). The v0.3 runtime tracked `gas_used` per dimension but never aborted on overflow; that caveat is gone. Two layers of metering now compose:
   - **Per-dimension gas budgets**: `Instance::set_gas_budget(dim, units)` sets a budget; `env.gas_consume(dim, amount)` traps the current call when `gas_used + amount > budget`. Dimensions without a budget set are unmetered. Lets chains express the multi-dimensional gas model from RFC #7 (cpu / storage / witness / etc.).
   - **Wasmtime fuel**: enabled in `Config::consume_fuel(true)` so every WASM instruction consumes fuel. Catches infinite loops in pure WASM that never call into a hostcall. `Instance::set_fuel(units)` sets the budget; `Instance::fuel_remaining()` reports how much is left. Default is 10 billion units (`DEFAULT_FUEL`), generous enough that existing callers see no behavior change.

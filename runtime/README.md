@@ -86,13 +86,22 @@ cargo run --release --bin cleave-run -- --evm 0x60005460010180600055600052602060
 #   storage[0] = 3
 ```
 
+For a real Solidity contract, compile with `solc` and pass the hex bytecode the same way:
+
+```
+solc --bin --optimize MyToken.sol           # outputs a "Binary:" hex blob
+cargo run --release --bin cleave-run -- --evm 0x<bytecode>
+```
+
+`tests/solidity.rs` shows the full end-to-end pattern (compile, deploy with constructor args, call `balanceOf` / `transfer` via hand-rolled ABI encoding of the function selectors). ERC-20 transfers, balance reads, and revert-on-insufficient-balance all run against the real Solidity compiler in CI.
+
 ## Testing
 
 ```
 cargo test
 ```
 
-Five unit tests use a precompiled WASM snapshot embedded in `lib.rs` (no C toolchain needed). Two integration tests in `tests/end_to_end.rs` shell out to `../compiler/build/cleavec` to compile `examples/counter-mvp.cv` and exercise the full pipeline. The integration tests print a clear skip notice if `cleavec` is not built yet rather than failing.
+Seventeen unit tests use a precompiled WASM snapshot embedded in `lib.rs` (no C toolchain needed). Two integration tests in `tests/end_to_end.rs` shell out to `../compiler/build/cleavec` to compile `examples/counter-mvp.cv` and exercise the full Cleave pipeline. Two integration tests in `tests/solidity.rs` shell out to `solc` to compile `tests/fixtures/MiniERC20.sol` and exercise the full Solidity pipeline. Integration tests print a clear skip notice if their toolchain (cleavec / solc) is not available rather than failing.
 
 ## Benchmarks
 
@@ -124,7 +133,6 @@ These numbers reflect raw VM dispatch only. Real chain throughput will be bound 
 - Multiple modules sharing state
 - Cross-module calls
 - **Cross-engine state sharing**: WASM modules and EVM contracts each have their own state today. A Cleave module calling a Solidity contract on the same chain (or vice versa) requires a shared state backend; that's its own future issue.
-- ERC-20 / standard Solidity contract deployment via `solc` toolchain (the EVM engine accepts raw bytecode today; the toolchain layer is the next step)
 - JSON-RPC layer for `eth_sendRawTransaction` and friends
 - Integration with a consensus layer
 
