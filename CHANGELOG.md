@@ -8,6 +8,7 @@ Prose references a version as `v0.X.Y`; headings stay bare `[0.X.Y]`.
 
 ### Changed
 
+- `spec/rfcs/0004-cross-engine-state.md` expanded to decision-ready proposal. Commits to **option (b)** from the original 4 design candidates: unified KV addressed by `(engine, identity, key)` triples with a single Merkle root. Concrete byte-level key encoding (1-byte engine tag + 20-byte identity + variable engine-specific key), synthetic WASM module addresses (keccak256 of chain_id + module_name + version), cross-engine reads via host functions (WASM->EVM) and a reserved precompile (EVM->WASM), no cross-engine writes in v0. 4-phase implementation roadmap (~850 LoC total). Open questions reduced from 6 to 1 (perf-bench validation of <10% prefix-encoding overhead).
 - `spec/rfcs/0002-extern-host-abi.md` expanded from open-design strawman to decision-ready proposal. Same shape as the RFC 0001 expansion: concrete declaration syntax, full lifecycle example (stdlib declares, module uses, chain authorizes, runtime validates), proposed initial stdlib set (blake3, keccak256, sha256, ec_recover, BLS, ed25519), gas-pricing table shape (fixed-per-call + per-byte), counterargument section, 5-phase implementation roadmap. Open questions reduced from 7 to 2. Decisions: per-chain allow-list, namespace-prefix versioning (`host_v1.*`), stdlib audited / custom is operator's responsibility, no reentrancy into env hostcalls.
 
 ### Added
