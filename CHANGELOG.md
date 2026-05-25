@@ -6,6 +6,10 @@ Prose references a version as `v0.X.Y`; headings stay bare `[0.X.Y]`.
 
 ## [Unreleased]
 
+### Changed
+
+- `spec/rfcs/0002-extern-host-abi.md` expanded from open-design strawman to decision-ready proposal. Same shape as the RFC 0001 expansion: concrete declaration syntax, full lifecycle example (stdlib declares, module uses, chain authorizes, runtime validates), proposed initial stdlib set (blake3, keccak256, sha256, ec_recover, BLS, ed25519), gas-pricing table shape (fixed-per-call + per-byte), counterargument section, 5-phase implementation roadmap. Open questions reduced from 7 to 2. Decisions: per-chain allow-list, namespace-prefix versioning (`host_v1.*`), stdlib audited / custom is operator's responsibility, no reentrancy into env hostcalls.
+
 ### Added
 
 - Type-system: `type_is_copy(const Type *)` classification (RFC 0001 Phase 1). Primitives, unit, function types, and unknown are `Copy`; generic-head aggregates (`Result<T>`, `Vec<T>`, etc.) are NOT `Copy`. Public API in `typecheck.h`.
