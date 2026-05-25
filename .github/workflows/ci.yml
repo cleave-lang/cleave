@@ -20,7 +20,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential
+        # wabt provides wasm-validate, which we use to confirm every
+        # example we claim works compiles to a spec-conformant module.
+        run: sudo apt-get update && sudo apt-get install -y build-essential wabt
 
       - name: Build
         run: make -C compiler
@@ -36,6 +38,35 @@ jobs:
 
       - name: Bench
         run: make -C compiler bench
+
+      - name: Validate emitted wasm against examples
+        # Compile every example marked "yes" in examples/README.md and
+        # confirm wasm-validate accepts the output. Catches codegen bugs
+        # that pass our byte-level unit tests but produce structurally
+        # invalid modules (e.g. wrong locals declaration, missing END).
+        run: |
+          set -euxo pipefail
+          mkdir -p /tmp/wasm-out
+          for src in examples/counter-mvp.cv; do
+            out=/tmp/wasm-out/$(basename "$src" .cv).wasm
+            ./compiler/build/cleavec --emit-wasm "$src" -o "$out"
+            wasm-validate "$out"
+          done
+
+      - name: Determinism check (compile twice, diff)
+        # Same source through the full pipeline must produce
+        # byte-identical wasm across two runs. Guards against
+        # nondeterminism leaking in from HashMap iteration order,
+        # pointer addresses, build timestamps, etc.
+        run: |
+          set -euxo pipefail
+          ./compiler/build/cleavec --emit-wasm examples/counter-mvp.cv -o /tmp/det-a.wasm
+          ./compiler/build/cleavec --emit-wasm examples/counter-mvp.cv -o /tmp/det-b.wasm
+          if ! cmp -s /tmp/det-a.wasm /tmp/det-b.wasm; then
+            echo "codegen is not deterministic: two compilations differ" >&2
+            cmp /tmp/det-a.wasm /tmp/det-b.wasm || true
+            exit 1
+          fi
 
   runtime:
     name: Runtime · Build · Test
@@ -55,7 +86,13 @@ jobs:
         run: make -C compiler
 
       - name: Install Rust toolchain
+        # `clippy` component is added so the lint step below has access
+        # to it. `dtolnay/rust-toolchain@stable` follows whatever the
+        # latest stable rustc is; MSRV is pinned in runtime/Cargo.toml
+        # (rust-version = "1.95") so a downgrade attempt fails fast.
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Cache cargo registry + build
         uses: actions/cache@v4
@@ -67,6 +104,12 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('runtime/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
+
+      - name: Lint runtime (clippy, deny warnings)
+        # Run lint before build to fail fast on style / correctness
+        # issues before paying the full Wasmtime + Cranelift compile.
+        working-directory: runtime
+        run: cargo clippy --all-targets --release -- -D warnings
 
       - name: Build runtime
         working-directory: runtime

@@ -2,6 +2,11 @@
 name = "cleave-runtime"
 version = "0.3.0"
 edition = "2021"
+# MSRV. We bumped from 1.87 -> 1.95 mid-v0.3 because revm 40 + ruint 1.18
+# require rustc >= 1.91. Lock the floor here so CI fails fast if anyone
+# tries to downgrade. Older stable releases will not build the runtime
+# crate; that's a deliberate consequence of pinning to the modern REVM.
+rust-version = "1.95"
 license = "Apache-2.0"
 description = "Wasmtime-backed execution engine for Cleave-compiled WASM modules."
 repository = "https://github.com/cleave-lang/cleave"

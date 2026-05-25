@@ -8,6 +8,12 @@ Prose references a version as `v0.X.Y`; headings stay bare `[0.X.Y]`.
 
 ### Added
 
+- CI gains four lower-cost gates:
+  - **`wasm-validate` on emitted modules.** The compiler job installs wabt, compiles every example marked "yes" in `examples/README.md`, and runs `wasm-validate` on the output. Catches structurally invalid modules that pass our byte-level codegen unit tests.
+  - **Determinism check.** The compiler job compiles `examples/counter-mvp.cv` twice and `cmp -s` the outputs; non-zero exit on any difference. Guards against nondeterminism from HashMap iteration order, pointer addresses, build timestamps.
+  - **`cargo clippy --all-targets --release -- -D warnings`** as the first runtime step. Runs before the full Wasmtime + Cranelift compile so style and correctness lints fail fast.
+  - **MSRV pin** in `runtime/Cargo.toml`: `rust-version = "1.95"`. Locks the floor after the v0.3 bump (revm 40 + ruint 1.18 need rustc >= 1.91).
+- One existing clippy lint fixed inline (`runtime/src/main.rs::hex_decode` now uses `s.len().is_multiple_of(2)` instead of `s.len() % 2 != 0`).
 - Codegen for `let` bindings (`compiler/src/codegen.c`). The v0.3 codegen rejected `let` with a diagnostic; this lifts the restriction. The fn-body emitter pre-scans the top-level block to count let statements, allocates one WASM local per binding at index `n_params + let_index`, emits a single locals declaration group of N i64s, and lowers each `let name = expr` to `<expr>; local.set <idx>`. Reads of let-bound names go through the existing `local.get` path; assignments to let names route to `local.set`. `find_local` now scans most-recent-first so shadowing matches user expectation. Closes #44.
 - 7 codegen tests (`codegen_test.c`): locals declaration byte sequence, `local.set 0` / `local.get 0` opcodes, post-param local index, three-let single-group declaration, let referencing earlier let, reassignment lowering, regression guard that fn with no lets still emits a zero local-groups byte.
 - `codegen_let_heavy` bench case: 8 let bindings + arithmetic chain.
