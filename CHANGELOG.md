@@ -8,6 +8,12 @@ Prose references a version as `v0.X.Y`; headings stay bare `[0.X.Y]`.
 
 ### Added
 
+- Codegen for `if` / `else` / `else if` chains (`compiler/src/codegen.c`). The v0.3 codegen rejected `if` statements; this lifts the restriction. Cleave-compiled WASM modules can now do branching. New `emit_if` lowers to WASM's native `if 0x40 ... else ... end` instruction sequence with an empty block type (if-as-expression remains gated on the parser supporting it). `else if` chains nest naturally as `if ... else (if ...)`. Closes #49.
+- Cond coercion to i32. WASM's `if` instruction consumes an i32, but Cleave-compiled expressions usually leave i64 on the stack (literals, identifier reads, calls, arithmetic). Codegen now emits `i32.wrap_i64` (0xA7) before the `if` byte when needed. Comparisons (`==`, `!=`, `<`, `>`, `<=`, `>=`) already produce i32 per the WASM spec, so no wrap is emitted in that case; a new `leaves_i32_on_stack` helper distinguishes the two.
+- New `leaves_value_on_stack` helper that returns false for assignment expressions. Used in both the if-branch and fn-body code paths so a block whose trailing expression is `x = expr` does not get a spurious `drop` or default-zero. Fixes a latent bug that existed before this PR: a fn whose body ended in an assignment produced invalid WASM. The pre-existing tests did not catch it because every example always had a non-assignment trailing expression.
+- 6 codegen tests covering: if without else, if with else, else-if chain, comparison-cond (no wrap), bool-literal cond (wrap), and the assignment-branch-no-drop regression that surfaced during this PR's development.
+- `codegen_if_heavy` bench case: 5-way else-if chain.
+- New opcodes registered in `wasm.h`: `WASM_OP_BLOCK 0x02`, `WASM_OP_LOOP 0x03`, `WASM_OP_IF 0x04`, `WASM_OP_ELSE 0x05`, `WASM_OP_I32_WRAP_I64 0xA7`. New constant `WASM_BLOCKTYPE_EMPTY 0x40`.
 - CI gains four lower-cost gates:
   - **`wasm-validate` on emitted modules.** The compiler job installs wabt, compiles every example marked "yes" in `examples/README.md`, and runs `wasm-validate` on the output. Catches structurally invalid modules that pass our byte-level codegen unit tests.
   - **Determinism check.** The compiler job compiles `examples/counter-mvp.cv` twice and `cmp -s` the outputs; non-zero exit on any difference. Guards against nondeterminism from HashMap iteration order, pointer addresses, build timestamps.

@@ -368,6 +368,131 @@ TEST(test_let_assignment_writes_back_to_local) {
     wasm_free(&bin);
 }
 
+/* ============== if / else / else-if (issue #49) ============== */
+
+TEST(test_if_without_else_emits_if_blocktype_end) {
+    /* Simple if with no else. We expect to find:
+     *   if 0x40        (0x04 0x40, empty block type)
+     *   ... then body ...
+     *   end            (0x0B)
+     * No else byte (0x05). Use a comparison condition so no i32.wrap_i64
+     * coercion is emitted between cond and the if instruction. */
+    const char *src =
+        "module M {\n"
+        "  state x: u64\n"
+        "  fn f() -> u64 { if x == 0 { x = 1 }; x }\n"
+        "}";
+    WasmBuf bin;
+    ASSERT(compile_source(src, &bin));
+    const uint8_t needle[] = { 0x04, 0x40 };
+    ASSERT(contains_bytes(&bin, needle, sizeof(needle)));
+    wasm_free(&bin);
+}
+
+TEST(test_if_with_else_emits_if_else_end) {
+    /* Look for `if 0x40 ... else (0x05) ... end (0x0B)` substring. */
+    const char *src =
+        "module M {\n"
+        "  state x: u64\n"
+        "  fn f() -> u64 { if x == 0 { x = 1 } else { x = 2 }; x }\n"
+        "}";
+    WasmBuf bin;
+    ASSERT(compile_source(src, &bin));
+    /* The exact then-body bytes for `x = 1` are:
+     *   i32.const 0 (slot)  0x41 0x00
+     *   i64.const 1         0x42 0x01
+     *   call 1 (state_set)  0x10 0x01
+     * Then else (0x05). */
+    const uint8_t needle[] = {
+        0x04, 0x40,                       /* if empty */
+        0x41, 0x00, 0x42, 0x01, 0x10, 0x01, /* then: x = 1 */
+        0x05,                              /* else */
+    };
+    ASSERT(contains_bytes(&bin, needle, sizeof(needle)));
+    wasm_free(&bin);
+}
+
+TEST(test_else_if_chain_nests_inner_if) {
+    /* `if a { ... } else if b { ... }` should emit two `if 0x40` and
+     * two `end` bytes. */
+    const char *src =
+        "module M {\n"
+        "  state x: u64\n"
+        "  fn f() -> u64 { if x == 0 { x = 1 } else if x == 1 { x = 2 } else { x = 3 }; x }\n"
+        "}";
+    WasmBuf bin;
+    ASSERT(compile_source(src, &bin));
+    /* Two `if 0x40` substrings should appear (outer + inner else-if). */
+    size_t first = 0, second = 0;
+    const uint8_t needle[] = { 0x04, 0x40 };
+    /* Count occurrences. */
+    int hits = 0;
+    for (size_t i = 0; i + sizeof(needle) <= bin.len; ++i) {
+        if (memcmp(bin.data + i, needle, sizeof(needle)) == 0) {
+            if (hits == 0) first = i;
+            else second = i;
+            hits++;
+        }
+    }
+    (void)first; (void)second;
+    ASSERT(hits >= 2);
+    wasm_free(&bin);
+}
+
+TEST(test_comparison_cond_does_not_need_i32_wrap) {
+    /* Comparison opcodes (i64.eq etc.) return i32 in WASM, so the cond
+     * value is already the right shape for `if`. The codegen should NOT
+     * emit i32.wrap_i64 (0xA7) immediately before the `if 0x40` bytes. */
+    const char *src =
+        "module M {\n"
+        "  fn f(a: u64) -> u64 { if a == 1 { } else { }; 0 }\n"
+        "}";
+    WasmBuf bin;
+    ASSERT(compile_source(src, &bin));
+    /* The sequence `0xA7 0x04 0x40` would indicate a redundant wrap.
+     * Confirm it does NOT appear. */
+    const uint8_t bad[] = { 0xA7, 0x04, 0x40 };
+    ASSERT(!contains_bytes(&bin, bad, sizeof(bad)));
+    wasm_free(&bin);
+}
+
+TEST(test_bool_literal_cond_emits_i32_wrap_i64) {
+    /* A bool literal (or any non-comparison expression) leaves i64 on
+     * the stack; the codegen must emit i32.wrap_i64 (0xA7) before the
+     * if instruction. */
+    const char *src =
+        "module M {\n"
+        "  fn f() -> u64 { if true { } else { }; 0 }\n"
+        "}";
+    WasmBuf bin;
+    ASSERT(compile_source(src, &bin));
+    /* Expect: i64.const 1 (0x42 0x01), then i32.wrap_i64 (0xA7),
+     * then if (0x04 0x40). */
+    const uint8_t needle[] = { 0x42, 0x01, 0xA7, 0x04, 0x40 };
+    ASSERT(contains_bytes(&bin, needle, sizeof(needle)));
+    wasm_free(&bin);
+}
+
+TEST(test_if_with_assignment_branch_does_not_emit_drop) {
+    /* Regression test: when an if branch is `{ x = 5 }`, the parser
+     * puts the assignment in block.result (no semicolon, sits right
+     * before `}`). The branch leaves nothing on the stack because
+     * state_set is void. The codegen must NOT emit a `drop` (0x1A),
+     * since that would underflow. */
+    const char *src =
+        "module M {\n"
+        "  state x: u64\n"
+        "  fn f() -> u64 { if 1 == 1 { x = 5 }; x }\n"
+        "}";
+    WasmBuf bin;
+    ASSERT(compile_source(src, &bin));
+    /* If the bug returns, a drop byte (0x1A) appears right after
+     * `call 1` (state_set, 0x10 0x01) and before `end` (0x0B). */
+    const uint8_t bad[] = { 0x10, 0x01, 0x1A };
+    ASSERT(!contains_bytes(&bin, bad, sizeof(bad)));
+    wasm_free(&bin);
+}
+
 TEST(test_no_let_bindings_emits_zero_local_groups) {
     /* Functions with no let bindings should still emit a leading 0
      * (zero local groups) in their code section. Regression guard for
@@ -415,6 +540,14 @@ int main(void) {
     RUN(test_let_referencing_earlier_let);
     RUN(test_let_assignment_writes_back_to_local);
     RUN(test_no_let_bindings_emits_zero_local_groups);
+
+    /* if / else / else-if (issue #49) */
+    RUN(test_if_without_else_emits_if_blocktype_end);
+    RUN(test_if_with_else_emits_if_else_end);
+    RUN(test_else_if_chain_nests_inner_if);
+    RUN(test_comparison_cond_does_not_need_i32_wrap);
+    RUN(test_bool_literal_cond_emits_i32_wrap_i64);
+    RUN(test_if_with_assignment_branch_does_not_emit_drop);
 
     REPORT();
 }
