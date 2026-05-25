@@ -31,6 +31,25 @@ static const char *ARITHMETIC_HEAVY =
     "  }\n"
     "}";
 
+/* Exercises the let-binding codegen path (issue #44): eight local
+ * variables, the trailing expression reads several of them. The
+ * pre-scan walks 8 stmts; the locals declaration is one i64 group
+ * of 8; emission produces 8 local.set + several local.get sequences. */
+static const char *LET_HEAVY =
+    "module M {\n"
+    "  fn f(a: u64) -> u64 {\n"
+    "    let b = a + 1\n"
+    "    let c = b + 2\n"
+    "    let d = c + 3\n"
+    "    let e = d + 4\n"
+    "    let g = e + 5\n"
+    "    let h = g + 6\n"
+    "    let i = h + 7\n"
+    "    let j = i + 8\n"
+    "    j\n"
+    "  }\n"
+    "}";
+
 static FILE *DEV_NULL;
 
 int main(void) {
@@ -51,6 +70,18 @@ int main(void) {
 
     BENCH("codegen_arithmetic_heavy", {
         Lexer lex; lexer_init(&lex, ARITHMETIC_HEAVY);
+        Parser p;  parser_init(&p, &lex);
+        AstNode *prog = parser_parse_program(&p);
+        TypeChecker tc; typecheck_init(&tc, DEV_NULL);
+        (void)typecheck_program(&tc, prog);
+        Codegen cg; cg_init(&cg, DEV_NULL);
+        WasmBuf bin;
+        (void)cg_compile_program(&cg, prog, &bin);
+        wasm_free(&bin);
+    });
+
+    BENCH("codegen_let_heavy", {
+        Lexer lex; lexer_init(&lex, LET_HEAVY);
         Parser p;  parser_init(&p, &lex);
         AstNode *prog = parser_parse_program(&p);
         TypeChecker tc; typecheck_init(&tc, DEV_NULL);

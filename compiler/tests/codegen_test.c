@@ -253,6 +253,139 @@ TEST(test_chain_only_program_is_rejected) {
      * initialized by codegen, so do not free it. */
 }
 
+/* ============== let bindings (issue #44) ============== */
+
+TEST(test_let_binding_declares_one_local) {
+    const char *src =
+        "module M {\n"
+        "  fn f() -> u64 { let x = 7; x }\n"
+        "}";
+    WasmBuf bin;
+    ASSERT(compile_source(src, &bin));
+    /* The code-section entry for `f` begins with a length prefix, then
+     * the locals declaration: `LEB(1 group)` `LEB(1 local)` `0x7E` (i64).
+     * That three-byte sequence is unique enough to assert directly. */
+    const uint8_t needle[] = { 0x01, 0x01, 0x7E };
+    ASSERT(contains_bytes(&bin, needle, sizeof(needle)));
+    wasm_free(&bin);
+}
+
+TEST(test_let_binding_emits_local_set_zero) {
+    /* For a fn with zero params, the first let binding gets local
+     * index 0; the assignment lowers to `local.set 0` (0x21 0x00). */
+    const char *src =
+        "module M {\n"
+        "  fn f() -> u64 { let x = 42; x }\n"
+        "}";
+    WasmBuf bin;
+    ASSERT(compile_source(src, &bin));
+    const uint8_t set_zero[] = { 0x21, 0x00 };
+    ASSERT(contains_bytes(&bin, set_zero, sizeof(set_zero)));
+    /* And the read of `x` lowers to `local.get 0` (0x20 0x00). */
+    const uint8_t get_zero[] = { 0x20, 0x00 };
+    ASSERT(contains_bytes(&bin, get_zero, sizeof(get_zero)));
+    wasm_free(&bin);
+}
+
+TEST(test_let_binding_after_param_uses_next_local_index) {
+    /* With one parameter, the first let gets local index 1
+     * (params occupy 0..n_params). The let body should contain
+     * `local.set 1` (0x21 0x01) and the read `local.get 1` (0x20 0x01). */
+    const char *src =
+        "module M {\n"
+        "  fn f(a: u64) -> u64 { let b = a; b }\n"
+        "}";
+    WasmBuf bin;
+    ASSERT(compile_source(src, &bin));
+    const uint8_t set_one[] = { 0x21, 0x01 };
+    ASSERT(contains_bytes(&bin, set_one, sizeof(set_one)));
+    const uint8_t get_one[] = { 0x20, 0x01 };
+    ASSERT(contains_bytes(&bin, get_one, sizeof(get_one)));
+    wasm_free(&bin);
+}
+
+TEST(test_multiple_let_bindings_share_one_local_group) {
+    /* Three let bindings of the same type collapse into a single
+     * locals-declaration group of count 3. */
+    const char *src =
+        "module M {\n"
+        "  fn f() -> u64 {\n"
+        "    let a = 1\n"
+        "    let b = 2\n"
+        "    let c = 3\n"
+        "    a + b + c\n"
+        "  }\n"
+        "}";
+    WasmBuf bin;
+    ASSERT(compile_source(src, &bin));
+    /* `LEB(1 group)` `LEB(3 locals)` `0x7E`. */
+    const uint8_t needle[] = { 0x01, 0x03, 0x7E };
+    ASSERT(contains_bytes(&bin, needle, sizeof(needle)));
+    wasm_free(&bin);
+}
+
+TEST(test_let_referencing_earlier_let) {
+    /* Let bindings can refer to earlier ones in the same fn body.
+     * `let y = x + 1` must compile and read x via local.get. */
+    const char *src =
+        "module M {\n"
+        "  fn f() -> u64 {\n"
+        "    let x = 10\n"
+        "    let y = x + 1\n"
+        "    y\n"
+        "  }\n"
+        "}";
+    WasmBuf bin;
+    ASSERT(compile_source(src, &bin));
+    /* Look for the byte sequence that lowers `x + 1`:
+     *   local.get 0  (0x20 0x00)
+     *   i64.const 1  (0x42 0x01)
+     *   i64.add      (0x7C)
+     * then local.set 1 (0x21 0x01). */
+    const uint8_t needle[] = { 0x20, 0x00, 0x42, 0x01, 0x7C, 0x21, 0x01 };
+    ASSERT(contains_bytes(&bin, needle, sizeof(needle)));
+    wasm_free(&bin);
+}
+
+TEST(test_let_assignment_writes_back_to_local) {
+    /* `x = 42` where `x` is a let binding lowers to local.set.
+     * Using 42 (one-byte signed LEB128 = 0x2A) keeps the byte needle
+     * stable; a value like 99 would need two LEB bytes because its
+     * bit-6 is set. */
+    const char *src =
+        "module M {\n"
+        "  fn f() -> u64 {\n"
+        "    let x = 1\n"
+        "    x = 42\n"
+        "    x\n"
+        "  }\n"
+        "}";
+    WasmBuf bin;
+    ASSERT(compile_source(src, &bin));
+    /* The reassignment lowers to: i64.const 42 (0x42 0x2A), local.set 0 (0x21 0x00). */
+    const uint8_t needle[] = { 0x42, 0x2A, 0x21, 0x00 };
+    ASSERT(contains_bytes(&bin, needle, sizeof(needle)));
+    wasm_free(&bin);
+}
+
+TEST(test_no_let_bindings_emits_zero_local_groups) {
+    /* Functions with no let bindings should still emit a leading 0
+     * (zero local groups) in their code section. Regression guard for
+     * the let-counting path: if the count is wrong, this byte changes
+     * and the WASM fails to validate. */
+    const char *src =
+        "module M {\n"
+        "  fn f() -> u64 { 42 }\n"
+        "}";
+    WasmBuf bin;
+    ASSERT(compile_source(src, &bin));
+    /* Body bytes for `f`: 0x00 (no locals), 0x42 0x2A (i64.const 42),
+     * 0x0B (end). Look for `0x00 0x42 0x2A 0x0B` as a unique sequence. */
+    const uint8_t needle[] = { 0x00, 0x42, 0x2A, 0x0B };
+    ASSERT(contains_bytes(&bin, needle, sizeof(needle)));
+    wasm_free(&bin);
+}
+
 int main(void) {
     /* LEB128 primitives */
     RUN(test_leb_u32_zero);
@@ -273,6 +406,15 @@ int main(void) {
     RUN(test_state_read_emits_state_get_call);
     RUN(test_function_call_emits_call_to_local_fn_index);
     RUN(test_chain_only_program_is_rejected);
+
+    /* let bindings (issue #44) */
+    RUN(test_let_binding_declares_one_local);
+    RUN(test_let_binding_emits_local_set_zero);
+    RUN(test_let_binding_after_param_uses_next_local_index);
+    RUN(test_multiple_let_bindings_share_one_local_group);
+    RUN(test_let_referencing_earlier_let);
+    RUN(test_let_assignment_writes_back_to_local);
+    RUN(test_no_let_bindings_emits_zero_local_groups);
 
     REPORT();
 }

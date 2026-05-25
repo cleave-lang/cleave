@@ -19,17 +19,19 @@
  *   - integer literals       -> i64.const
  *   - state identifier read  -> i32.const <slot>; call state_get
  *   - param identifier read  -> local.get <idx>
+ *   - let binding            -> <expr>; local.set <idx>  (issue #44)
+ *   - let identifier read    -> local.get <idx>
  *   - binary + - * /         -> i64.add / sub / mul / div_u
  *   - binary == != < > <= >= -> i64.eq / ne / lt_u / gt_u / le_u / ge_u
  *   - state = expr           -> i32.const <slot>; <expr>; call state_set
+ *   - local = expr           -> <expr>; local.set <idx>
  *   - module-fn call         -> args...; call <fn index>
  *   - block trailing expr    -> becomes the function's return value
  *
  * What we deliberately reject
  * ---------------------------
- *   - let statements (no local-slot allocation yet)
- *   - control flow (if/match/loops)
- *   - sum types (`Result`, `Option`)
+ *   - control flow (if/match/loops) -- see issues #43, #49
+ *   - sum types (`Result`, `Option`) -- see issue #48
  *   - identifiers we cannot resolve
  *
  * Anything in the reject list is reported with a codegen-not-supported
@@ -113,7 +115,9 @@ static const FnEntry *find_fn(const CodegenCtx *ctx, StrRef name) {
 }
 
 static const LocalEntry *find_local(const CodegenCtx *ctx, StrRef name) {
-    for (size_t i = 0; i < ctx->n_locals; ++i) {
+    /* Scan from the back so shadowing works the way users expect: the
+     * most recent binding with a given name wins. */
+    for (size_t i = ctx->n_locals; i-- > 0; ) {
         if (strref_eq(ctx->locals[i].name, name)) return &ctx->locals[i];
     }
     return NULL;
@@ -353,8 +357,23 @@ static void emit_block(CodegenCtx *ctx, WasmBuf *body, AstNode *node) {
             }
             wasm_write_byte(body, WASM_OP_RETURN);
         } else if (s->kind == AST_STMT_LET) {
-            cg_report(ctx, &s->span,
-                      "let bindings not yet supported in v0 codegen");
+            /* Local index was assigned during pre-scan in emit_fn_body;
+             * find it via the symbol-table lookup. The most-recent-wins
+             * scan order in find_local handles shadowing correctly. */
+            StmtLet *l = &s->as.let_stmt;
+            const LocalEntry *bind = find_local(ctx, l->name);
+            if (!bind) {
+                /* Shouldn't happen: pre-scan adds every let. Guard
+                 * defensively so a future refactor of the pre-scan
+                 * surfaces the bug as a clear diagnostic. */
+                cg_report(ctx, &s->span,
+                          "internal: let binding '%.*s' was not pre-scanned",
+                          (int)l->name.length, l->name.start);
+                continue;
+            }
+            emit_expr(ctx, body, l->value);
+            wasm_write_byte(body, WASM_OP_LOCAL_SET);
+            wasm_write_leb_u32(body, bind->local_index);
         } else {
             cg_report(ctx, &s->span,
                       "statement kind %s not yet supported in v0 codegen",
@@ -422,16 +441,40 @@ static void emit_expr(CodegenCtx *ctx, WasmBuf *body, AstNode *node) {
 
 /* ============== fn body emission ============== */
 
+/* Walk the body block's top-level statements once to count let
+ * bindings. v0 only scans the immediate body block since the codegen
+ * still rejects nested control flow (`if`, `match`, etc.). Once
+ * control-flow lowering lands, this scan must recurse into nested
+ * blocks; the rest of the let machinery already handles per-let
+ * symbol bindings irrespective of nesting depth. */
+static size_t count_let_bindings(const AstNode *body) {
+    if (!body || body->kind != AST_EXPR_BLOCK) return 0;
+    const ExprBlock *b = &body->as.block;
+    size_t n = 0;
+    for (size_t i = 0; i < b->n_stmts; ++i) {
+        if (b->stmts[i]->kind == AST_STMT_LET) n++;
+    }
+    return n;
+}
+
 static void emit_fn_body(CodegenCtx *ctx, AstNode *fn_decl,
                          WasmBuf *body_out) {
     FnDecl *f = &fn_decl->as.fn;
 
-    /* Build the per-fn local table. v0 only registers params; let-bindings
-     * are rejected by emit_block above. */
+    /* Pre-scan the body to count let bindings so we can size the local
+     * table up front and emit the correct WASM `locals` declaration.
+     * Params occupy local indices [0, n_params); let bindings occupy
+     * [n_params, n_params + n_lets). */
+    size_t n_lets = count_let_bindings(f->body);
+
+    /* Build the per-fn local table: params first, then a slot per let
+     * binding in source order. The let entries are filled in as we
+     * walk the body block below. */
+    size_t cap = f->n_params + n_lets;
     ctx->n_locals = 0;
     free(ctx->locals);
-    ctx->locals = f->n_params ? calloc(f->n_params, sizeof(LocalEntry)) : NULL;
-    if (f->n_params && !ctx->locals) {
+    ctx->locals = cap ? calloc(cap, sizeof(LocalEntry)) : NULL;
+    if (cap && !ctx->locals) {
         fputs("fatal: out of memory in codegen\n", stderr); exit(1);
     }
     for (size_t i = 0; i < f->n_params; ++i) {
@@ -439,9 +482,28 @@ static void emit_fn_body(CodegenCtx *ctx, AstNode *fn_decl,
         ctx->locals[i].local_index = (uint32_t)i;
         ctx->n_locals++;
     }
+    if (f->body && f->body->kind == AST_EXPR_BLOCK) {
+        const ExprBlock *b = &f->body->as.block;
+        for (size_t i = 0; i < b->n_stmts; ++i) {
+            AstNode *s = b->stmts[i];
+            if (s->kind != AST_STMT_LET) continue;
+            uint32_t idx = (uint32_t)ctx->n_locals;
+            ctx->locals[ctx->n_locals].name = s->as.let_stmt.name;
+            ctx->locals[ctx->n_locals].local_index = idx;
+            ctx->n_locals++;
+        }
+    }
 
-    /* Local declaration count = 0 (no let bindings declared as locals). */
-    wasm_write_leb_u32(body_out, 0);
+    /* Local declaration: 0 groups if no lets, else 1 group of n_lets
+     * i64 locals. All lets widen to i64 today (matching the rest of
+     * the v0 ABI); narrower widths land with sum types + struct types. */
+    if (n_lets == 0) {
+        wasm_write_leb_u32(body_out, 0);
+    } else {
+        wasm_write_leb_u32(body_out, 1);
+        wasm_write_leb_u32(body_out, (uint32_t)n_lets);
+        wasm_write_byte(body_out, WASM_TYPE_I64);
+    }
 
     if (!f->body) {
         /* synthesize a 0 return so the WASM body still validates */
