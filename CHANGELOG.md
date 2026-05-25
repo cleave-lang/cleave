@@ -8,6 +8,10 @@ Prose references a version as `v0.X.Y`; headings stay bare `[0.X.Y]`.
 
 ### Added
 
+- Subsystem keys in the chain manifest accept arbitrary identifiers, not just the five stdlib axes (`consensus`, `gas`, `state`, `exec`, `da`). A chain can declare any axis it cares about as a first-class subsystem: `privacy: GrothProver<curve=BN254>`, `mev: FlashbotsBundler`, etc. Lifts the parser-layer gatekeeping that was blocking third-party protocol extensions at the chain layer. Closes #64.
+- Parser test reworked: `test_error_unknown_subsystem_key` (which asserted "unknown:" was rejected) replaced by `test_arbitrary_subsystem_key_parses` (asserts `privacy: ...` works) plus `test_subsystem_key_can_still_be_stdlib_keyword` (regression guard that `consensus:`, `state:`, etc. still parse the same way).
+- `spec/grammar.ebnf` updated: `SubsystemKey = IDENT` instead of the enumerated five names; comment explains the stdlib axes are still conventions, just not parser-level requirements.
+- Tree-sitter grammar updated in lockstep: `subsystem_key` is now `$.identifier` instead of a fixed-choice rule.
 - Solidity toolchain integration. Real `solc`-compiled Solidity contracts now run end-to-end on the EVM engine. `runtime/tests/solidity.rs` shells out to `solc --bin --optimize` to compile `runtime/tests/fixtures/MiniERC20.sol`, deploys via `Evm::deploy` with a 32-byte ABI-encoded constructor arg (`initial supply`), then exercises `balanceOf` and `transfer` via hand-rolled ABI encoding of the standard selectors (`0x70a08231 balanceOf(address)`, `0xa9059cbb transfer(address,uint256)`, `0x18160ddd totalSupply()`). Closes #52.
 - 2 new integration tests:
   - `erc20_deploys_and_transfers`: deploys MiniERC20 with 1M supply to alice, asserts `totalSupply == 1M`, asserts `balanceOf(alice) == 1M` and `balanceOf(bob) == 0`, transfers 100 from alice to bob, asserts both balances post-transfer

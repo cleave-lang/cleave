@@ -39,8 +39,16 @@ SubsystemAssign
     = SubsystemKey, ":", TypeExpr
     ;
 
+(* Any identifier is a valid subsystem key (issue #64). The five names
+   below are the stdlib axes and remain reserved as keyword tokens for
+   reasons unrelated to the chain manifest (state and gas also start
+   module-item declarations). Chains can declare additional axes by
+   inventing new identifier names, which makes third-party protocol
+   extensions a first-class language feature. *)
+
 SubsystemKey
-    = "consensus" | "gas" | "state" | "exec" | "da"
+    = IDENT       (* includes the stdlib axes:
+                     "consensus", "gas", "state", "exec", "da" *)
     ;
 
 

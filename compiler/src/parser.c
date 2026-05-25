@@ -7,7 +7,9 @@
  *   top_level        := chain_decl | module_decl | protocol_decl
  *
  *   chain_decl       := "chain" IDENT "{" subsystem_assign* "}"
- *   subsystem_assign := SUBSYSTEM_KEY ":" type_expr (";"|",")?
+ *   subsystem_assign := IDENT ":" type_expr (";"|",")?     -- key is any
+ *                                                            identifier
+ *                                                            since issue #64
  *
  *   module_decl      := "module" IDENT "{" module_item* "}"
  *   module_item      := state_decl | gas_decl | event_decl | fn_decl | effect_decl
@@ -59,10 +61,23 @@
 
 #include "parser.h"
 
-/* Subsystem keys are lexed as their own keyword tokens (see lexer.c). The
- * parser accepts any of these as a chain-block field key. */
+/* Subsystem keys are arbitrary identifiers (issue #64). The five names
+ * `consensus`, `gas`, `state`, `exec`, `da` are still keyword tokens
+ * for other reasons (state/gas double as module-item declaration
+ * keywords), so we accept both the reserved keyword tokens AND plain
+ * identifiers in chain-block field-key position. A chain manifest can
+ * now declare any axis it cares about as a first-class subsystem:
+ *
+ *     chain MyZkChain {
+ *         consensus: Tendermint
+ *         privacy:   GrothProver<curve=BN254>
+ *     }
+ *
+ * Third-party protocol implementations (RFC #65) hang off this
+ * relaxation; the parser stops being the gatekeeper. */
 static int is_subsystem_key(TokenKind k) {
     switch (k) {
+    case TK_IDENT:
     case TK_KW_CONSENSUS:
     case TK_KW_GAS:
     case TK_KW_STATE:
@@ -347,11 +362,13 @@ static AstNode *parse_type_expr(Parser *p) {
 }
 
 /* subsystem_assign := SUBSYSTEM_KEY ":" type_expr
- * SUBSYSTEM_KEY is one of the keyword tokens (TK_KW_CONSENSUS, TK_KW_GAS, ...). */
+ * SUBSYSTEM_KEY is any identifier or one of the reserved subsystem
+ * keyword tokens (issue #64). The five stdlib names stay keywords
+ * because state/gas also introduce module-item declarations. */
 static AstNode *parse_subsystem_assign(Parser *p) {
     if (!is_subsystem_key(p->current.kind)) {
         error_at(p, &p->current,
-                 "expected a subsystem key (consensus, gas, state, exec, da)");
+                 "expected a subsystem key (an identifier)");
         return NULL;
     }
 
