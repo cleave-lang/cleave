@@ -41,10 +41,13 @@ pub struct HostState {
     /// these; the field is here so the runtime can record them once
     /// codegen does.
     pub events: Vec<EventRecord>,
-    /// Per-dimension gas consumed (dimension index -> units). Total is
-    /// uncapped in v0; an out-of-gas trap will land with the next
-    /// runtime iteration.
+    /// Per-dimension gas consumed (dimension index -> units).
     pub gas_used: HashMap<u32, u64>,
+    /// Per-dimension gas budget (dimension index -> max units). Dimensions
+    /// without an entry are unmetered. When `gas_used + amount` would
+    /// exceed `gas_budgets[dim]`, the `gas_consume` hostcall returns an
+    /// error and Wasmtime traps the current call.
+    pub gas_budgets: HashMap<u32, u64>,
 }
 
 /// A single recorded event. Cleave-compiled v0.3 modules never emit
@@ -80,6 +83,11 @@ impl Runtime {
         // bigger surgery on the engine config than v0 warrants.
         config.wasm_simd(false);
         config.wasm_relaxed_simd(false);
+        // Enable fuel metering so we can bound total execution per
+        // call.  Fuel ticks at the instruction level which catches
+        // infinite loops in pure WASM (no hostcall in the loop body
+        // would otherwise let a malicious module starve the node).
+        config.consume_fuel(true);
         Self {
             engine: Engine::new(&config).expect("wasmtime config is always valid"),
         }
@@ -87,11 +95,23 @@ impl Runtime {
 
     /// Load a WASM module from raw bytes, link the env-namespace
     /// hostcalls per `spec/abi/wasm.md`, and instantiate.
+    ///
+    /// The new instance starts with `DEFAULT_FUEL` units of Wasmtime
+    /// fuel and no per-dimension gas budget set.  Callers tune both
+    /// via [`Instance::set_fuel`] and [`Instance::set_gas_budget`]
+    /// before the first call.
     pub fn load(&self, wasm: &[u8]) -> Result<Instance> {
         let module = Module::new(&self.engine, wasm)
             .context("loading wasm bytes into a Module")?;
 
         let mut store = Store::new(&self.engine, HostState::default());
+        // Generous default so existing callers that do not opt into
+        // metering still see fully-executed modules. Tests and chain
+        // integrations should set their own budget via
+        // `Instance::set_fuel` immediately after `load`.
+        store
+            .set_fuel(DEFAULT_FUEL)
+            .expect("fuel is enabled on the engine config");
 
         let mut linker: Linker<HostState> = Linker::new(&self.engine);
         link_hostcalls(&mut linker)?;
@@ -103,6 +123,11 @@ impl Runtime {
         Ok(Instance { store, instance })
     }
 }
+
+/// Default fuel budget assigned to every freshly loaded instance.
+/// Generous enough for normal calls; a node operating a real chain
+/// will replace this with a per-transaction budget derived from gas.
+pub const DEFAULT_FUEL: u64 = 10_000_000_000;
 
 impl Default for Runtime {
     fn default() -> Self {
@@ -159,6 +184,32 @@ impl Instance {
             .copied()
             .unwrap_or(0)
     }
+
+    /// Set the per-dimension gas budget. When `gas_used + amount` for
+    /// a dimension would exceed its budget, `env.gas_consume` traps
+    /// the current call.  Dimensions without a budget set are
+    /// unmetered.
+    pub fn set_gas_budget(&mut self, dimension: u32, budget: u64) {
+        self.store.data_mut().gas_budgets.insert(dimension, budget);
+    }
+
+    /// Replace the current Wasmtime fuel budget. Lower values bound
+    /// total per-call execution more tightly; ~10 units per WASM
+    /// instruction is a reasonable rule of thumb.  Callers should set
+    /// this before the first `call` on an instance; setting it after
+    /// a partially-consumed call is supported but does not refund
+    /// already-spent fuel.
+    pub fn set_fuel(&mut self, units: u64) -> Result<()> {
+        self.store
+            .set_fuel(units)
+            .map_err(|e| anyhow!("set_fuel: {e}"))
+    }
+
+    /// Read the remaining Wasmtime fuel.  Useful as a coarse "how
+    /// much execution did the last call consume" measurement.
+    pub fn fuel_remaining(&self) -> u64 {
+        self.store.get_fuel().unwrap_or(0)
+    }
 }
 
 /// Register the env-namespace hostcalls onto a Wasmtime linker. The
@@ -191,11 +242,27 @@ fn link_hostcalls(linker: &mut Linker<HostState>) -> Result<()> {
         .func_wrap(
             "env",
             "gas_consume",
-            |mut caller: Caller<'_, HostState>, dimension: i32, amount: i64| {
+            |mut caller: Caller<'_, HostState>, dimension: i32, amount: i64| -> Result<()> {
                 let dim = dimension as u32;
                 let amount = amount.max(0) as u64;
-                let used = caller.data_mut().gas_used.entry(dim).or_insert(0);
-                *used = used.saturating_add(amount);
+                let state = caller.data_mut();
+                let prev = state.gas_used.get(&dim).copied().unwrap_or(0);
+                let new_total = prev.saturating_add(amount);
+                if let Some(&budget) = state.gas_budgets.get(&dim) {
+                    if new_total > budget {
+                        // Returning Err here causes Wasmtime to trap
+                        // the current call.  The error propagates out
+                        // through `Instance::call` as an Err result,
+                        // which the chain layer can surface to the
+                        // transaction submitter as an "out of gas".
+                        return Err(anyhow!(
+                            "out of gas: dimension {dim} budget {budget} \
+                             exceeded ({new_total} > {budget})"
+                        ));
+                    }
+                }
+                state.gas_used.insert(dim, new_total);
+                Ok(())
             },
         )
         .context("linking env.gas_consume")?;
@@ -322,5 +389,146 @@ mod tests {
         let err = instance.call("does_not_exist", &[]).unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("does_not_exist"), "error should name missing fn: {msg}");
+    }
+
+    // ====== gas-budget tests (issue #51) ======
+
+    /// Hand-crafted WASM module: imports env.gas_consume, exports
+    /// `do_work` which calls `gas_consume(0, 100)` then returns 1.
+    /// Verifying budget enforcement requires actually executing a
+    /// module that calls into the hostcall; the standard counter
+    /// module never does.
+    ///
+    /// Disassembled:
+    ///
+    ///     (module
+    ///       (type (func (param i32 i64)))
+    ///       (type (func (result i64)))
+    ///       (import "env" "gas_consume" (func (type 0)))
+    ///       (func (export "do_work") (result i64)
+    ///         i32.const 0    ;; dimension 0
+    ///         i64.const 100  ;; charge 100 units
+    ///         call 0         ;; gas_consume
+    ///         i64.const 1    ;; return 1
+    ///       ))
+    #[rustfmt::skip]
+    const GAS_TEST_WASM: &[u8] = &[
+        // magic + version
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+        // type section: 2 types
+        0x01, 0x0A, 0x02,
+        0x60, 0x02, 0x7F, 0x7E, 0x00,   // (i32, i64) -> ()
+        0x60, 0x00, 0x01, 0x7E,         // () -> i64
+        // import section: env.gas_consume : type 0
+        0x02, 0x13, 0x01,
+        0x03, b'e', b'n', b'v',
+        0x0B, b'g', b'a', b's', b'_', b'c', b'o', b'n', b's', b'u', b'm', b'e',
+        0x00, 0x00,
+        // function section: 1 fn of type 1
+        0x03, 0x02, 0x01, 0x01,
+        // export section: "do_work" func 1 (after import 0)
+        0x07, 0x0B, 0x01,
+        0x07, b'd', b'o', b'_', b'w', b'o', b'r', b'k',
+        0x00, 0x01,
+        // code section: 1 fn body, 11 bytes
+        0x0A, 0x0D, 0x01, 0x0B,
+        0x00,                      // 0 locals
+        0x41, 0x00,                // i32.const 0
+        0x42, 0xE4, 0x00,          // i64.const 100 (signed LEB)
+        0x10, 0x00,                // call 0 (gas_consume)
+        0x42, 0x01,                // i64.const 1
+        0x0B,                      // end
+    ];
+
+    #[test]
+    fn gas_consume_without_budget_runs_freely() {
+        let rt = Runtime::new();
+        let mut instance = rt.load(GAS_TEST_WASM).expect("gas test wasm loads");
+        let result = instance.call("do_work", &[]).expect("unmetered call succeeds");
+        assert_eq!(result, 1);
+        assert_eq!(instance.gas_used(0), 100);
+    }
+
+    #[test]
+    fn gas_consume_under_budget_runs_and_records_usage() {
+        let rt = Runtime::new();
+        let mut instance = rt.load(GAS_TEST_WASM).expect("gas test wasm loads");
+        instance.set_gas_budget(0, 1_000);
+        let result = instance.call("do_work", &[]).expect("under-budget call succeeds");
+        assert_eq!(result, 1);
+        assert_eq!(instance.gas_used(0), 100);
+    }
+
+    #[test]
+    fn gas_consume_over_budget_traps_with_clear_error() {
+        let rt = Runtime::new();
+        let mut instance = rt.load(GAS_TEST_WASM).expect("gas test wasm loads");
+        instance.set_gas_budget(0, 50);
+        let err = instance.call("do_work", &[]).expect_err("should trap");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("out of gas"),
+            "error should report out of gas: {msg}"
+        );
+        // gas_used stays at the pre-call value since the consume was
+        // rejected before the accumulator updated.
+        assert_eq!(instance.gas_used(0), 0);
+    }
+
+    #[test]
+    fn gas_budget_only_applies_to_set_dimension() {
+        let rt = Runtime::new();
+        let mut instance = rt.load(GAS_TEST_WASM).expect("gas test wasm loads");
+        // Tighten dimension 1; the wasm charges dimension 0 only, so
+        // the call should still succeed.
+        instance.set_gas_budget(1, 1);
+        let result = instance.call("do_work", &[]).expect("orthogonal dim budget");
+        assert_eq!(result, 1);
+        assert_eq!(instance.gas_used(0), 100);
+        assert_eq!(instance.gas_used(1), 0);
+    }
+
+    #[test]
+    fn fuel_default_is_sufficient_for_counter_module() {
+        // Regression guard on DEFAULT_FUEL: existing counter calls
+        // must not exhaust the default fuel allocation.
+        let rt = Runtime::new();
+        let mut instance = rt.load(COUNTER_WASM).expect("counter loads");
+        for _ in 0..100 {
+            instance.call("increment", &[]).expect("under default fuel");
+        }
+        assert_eq!(instance.state(0), 100);
+    }
+
+    #[test]
+    fn fuel_is_actually_consumed() {
+        // First confirm fuel metering is wired up at all. One
+        // `increment` call should consume a non-trivial amount of
+        // fuel from the default budget.
+        let rt = Runtime::new();
+        let mut instance = rt.load(COUNTER_WASM).expect("counter loads");
+        let before = instance.fuel_remaining();
+        instance.call("increment", &[]).unwrap();
+        let after = instance.fuel_remaining();
+        assert!(
+            after < before,
+            "fuel must decrease across a call (before={before}, after={after})"
+        );
+    }
+
+    #[test]
+    fn fuel_exhaustion_traps_the_call() {
+        let rt = Runtime::new();
+        let mut instance = rt.load(COUNTER_WASM).expect("counter loads");
+        // Zero fuel means even a single instruction traps. Wasmtime's
+        // exact fuel cost per WASM instruction varies by backend and
+        // version; zero is the one budget guaranteed to trap.
+        instance.set_fuel(0).unwrap();
+        let err = instance.call("increment", &[]).expect_err("should trap on fuel");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.to_lowercase().contains("fuel") || msg.to_lowercase().contains("trap"),
+            "error should mention fuel exhaustion: {msg}"
+        );
     }
 }

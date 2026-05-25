@@ -119,7 +119,7 @@ These numbers reflect raw VM dispatch only. Real chain throughput will be bound 
 ## What this runtime does not yet do
 
 - Persistence across processes (state is in-memory only)
-- Real gas budgets (`gas_consume` records usage but never aborts; EVM gas is metered by REVM but no budget enforcement at the cross-engine level)
+- Cross-engine gas accounting (the WASM engine enforces both Wasmtime fuel and per-dimension gas budgets; the EVM engine has its own REVM-internal gas, but no unified budget across the two)
 - Event payloads serialized from module memory beyond raw byte copy
 - Multiple modules sharing state
 - Cross-module calls
