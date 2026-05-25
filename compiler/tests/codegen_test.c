@@ -493,6 +493,135 @@ TEST(test_if_with_assignment_branch_does_not_emit_drop) {
     wasm_free(&bin);
 }
 
+/* ============== match (issue #43) ============== */
+
+TEST(test_match_allocates_extra_scratch_local) {
+    /* A fn with a single match (no lets) should declare exactly one
+     * i64 local for the match scratch. Locals declaration bytes:
+     *   LEB(1 group)  LEB(1 local)  0x7E (i64) -> 0x01 0x01 0x7E.
+     */
+    const char *src =
+        "module M {\n"
+        "  state x: u64\n"
+        "  fn f(a: u64) -> u64 {\n"
+        "    match a { 1 => x = 1, _ => x = 0 }\n"
+        "    x\n"
+        "  }\n"
+        "}";
+    WasmBuf bin;
+    ASSERT(compile_source(src, &bin));
+    const uint8_t needle[] = { 0x01, 0x01, 0x7E };
+    ASSERT(contains_bytes(&bin, needle, sizeof(needle)));
+    wasm_free(&bin);
+}
+
+TEST(test_match_saves_scrutinee_then_compares) {
+    /* For `match a { 1 => ..., _ => ... }` with `a` as param (local 0),
+     * the codegen emits:
+     *   local.get 0         (scrutinee read)
+     *   local.set 1         (save to scratch)
+     *   local.get 1         (re-read for first comparison)
+     *   i64.const 1
+     *   i64.eq              (0x51)
+     *   if 0x40             (0x04 0x40)
+     */
+    const char *src =
+        "module M {\n"
+        "  state x: u64\n"
+        "  fn f(a: u64) -> u64 {\n"
+        "    match a { 1 => x = 1, _ => x = 0 }\n"
+        "    x\n"
+        "  }\n"
+        "}";
+    WasmBuf bin;
+    ASSERT(compile_source(src, &bin));
+    const uint8_t needle[] = {
+        0x20, 0x00,            /* local.get 0 (scrutinee a) */
+        0x21, 0x01,            /* local.set 1 (scratch) */
+        0x20, 0x01,            /* local.get 1 (re-read) */
+        0x42, 0x01,            /* i64.const 1 */
+        0x51,                  /* i64.eq */
+        0x04, 0x40,            /* if empty */
+    };
+    ASSERT(contains_bytes(&bin, needle, sizeof(needle)));
+    wasm_free(&bin);
+}
+
+TEST(test_match_wildcard_terminates_chain) {
+    /* A match with two literal arms followed by a wildcard generates
+     * exactly two nested ifs (one per literal arm); the wildcard
+     * becomes the innermost else branch with no further if comparison. */
+    const char *src =
+        "module M {\n"
+        "  state x: u64\n"
+        "  fn f(a: u64) -> u64 {\n"
+        "    match a { 1 => x = 1, 2 => x = 2, _ => x = 0 }\n"
+        "    x\n"
+        "  }\n"
+        "}";
+    WasmBuf bin;
+    ASSERT(compile_source(src, &bin));
+    /* Two `if 0x40` substrings (one per literal arm) but only one `else`
+     * directly followed by the wildcard's body (no third `if 0x40`). */
+    int if_count = 0;
+    const uint8_t if_bytes[] = { 0x04, 0x40 };
+    for (size_t i = 0; i + sizeof(if_bytes) <= bin.len; ++i) {
+        if (memcmp(bin.data + i, if_bytes, sizeof(if_bytes)) == 0) if_count++;
+    }
+    ASSERT_EQ_INT(if_count, 2);
+    wasm_free(&bin);
+}
+
+TEST(test_match_without_wildcard_omits_final_else) {
+    /* `match a { 1 => x = 1, 2 => x = 2 }` (no wildcard): the chain
+     * still produces two `if 0x40` blocks, but the inner if has no
+     * `else` byte (0x05).  Verify the inner if is followed directly
+     * by `end` (0x0B) -> outer `else` (0x05) -> outer `end` (0x0B). */
+    const char *src =
+        "module M {\n"
+        "  state x: u64\n"
+        "  fn f(a: u64) -> u64 {\n"
+        "    match a { 1 => x = 1, 2 => x = 2 }\n"
+        "    x\n"
+        "  }\n"
+        "}";
+    WasmBuf bin;
+    ASSERT(compile_source(src, &bin));
+    /* Look for: call 1 (state_set 0x10 0x01), end (0x0B), end (0x0B).
+     * The double `end` is the inner-if-no-else + outer-if termination.
+     * Crude but distinguishes the no-wildcard shape from the
+     * with-wildcard shape (which has `else` between them). */
+    const uint8_t needle[] = { 0x10, 0x01, 0x0B, 0x0B };
+    ASSERT(contains_bytes(&bin, needle, sizeof(needle)));
+    wasm_free(&bin);
+}
+
+TEST(test_match_with_only_wildcard_is_unconditional) {
+    /* `match a { _ => x = 5 }` is just an unconditional branch: the
+     * scrutinee gets saved to the scratch local but no `if` instruction
+     * is emitted; the body runs unconditionally. */
+    const char *src =
+        "module M {\n"
+        "  state x: u64\n"
+        "  fn f(a: u64) -> u64 {\n"
+        "    match a { _ => x = 5 }\n"
+        "    x\n"
+        "  }\n"
+        "}";
+    WasmBuf bin;
+    ASSERT(compile_source(src, &bin));
+    /* The scrutinee is still saved (local.get 0; local.set 1) even
+     * for a wildcard-only match, since `count_local_slots` allocates
+     * the scratch unconditionally for any match. Confirm save happens. */
+    const uint8_t save[] = { 0x20, 0x00, 0x21, 0x01 };
+    ASSERT(contains_bytes(&bin, save, sizeof(save)));
+    /* And no `if 0x40` is emitted in the match path. The fn body has
+     * no other if/match. */
+    const uint8_t if_byte[] = { 0x04, 0x40 };
+    ASSERT(!contains_bytes(&bin, if_byte, sizeof(if_byte)));
+    wasm_free(&bin);
+}
+
 TEST(test_no_let_bindings_emits_zero_local_groups) {
     /* Functions with no let bindings should still emit a leading 0
      * (zero local groups) in their code section. Regression guard for
@@ -548,6 +677,13 @@ int main(void) {
     RUN(test_comparison_cond_does_not_need_i32_wrap);
     RUN(test_bool_literal_cond_emits_i32_wrap_i64);
     RUN(test_if_with_assignment_branch_does_not_emit_drop);
+
+    /* match (issue #43) */
+    RUN(test_match_allocates_extra_scratch_local);
+    RUN(test_match_saves_scrutinee_then_compares);
+    RUN(test_match_wildcard_terminates_chain);
+    RUN(test_match_without_wildcard_omits_final_else);
+    RUN(test_match_with_only_wildcard_is_unconditional);
 
     REPORT();
 }

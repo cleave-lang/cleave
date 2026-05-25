@@ -31,6 +31,25 @@ static const char *ARITHMETIC_HEAVY =
     "  }\n"
     "}";
 
+/* Exercises the match codegen path (issue #43): six arms + wildcard
+ * driving the scrutinee-save + chained i64.eq + nested-if structure. */
+static const char *MATCH_HEAVY =
+    "module M {\n"
+    "  state x: u64\n"
+    "  fn route(n: u64) -> u64 {\n"
+    "    match n {\n"
+    "      0 => x = 10,\n"
+    "      1 => x = 20,\n"
+    "      2 => x = 30,\n"
+    "      3 => x = 40,\n"
+    "      4 => x = 50,\n"
+    "      5 => x = 60,\n"
+    "      _ => x = 999\n"
+    "    }\n"
+    "    x\n"
+    "  }\n"
+    "}";
+
 /* Exercises the if/else codegen path (issue #49): an else-if chain
  * that drives the cond coercion + nested-if logic. */
 static const char *IF_HEAVY =
@@ -110,6 +129,18 @@ int main(void) {
 
     BENCH("codegen_if_heavy", {
         Lexer lex; lexer_init(&lex, IF_HEAVY);
+        Parser p;  parser_init(&p, &lex);
+        AstNode *prog = parser_parse_program(&p);
+        TypeChecker tc; typecheck_init(&tc, DEV_NULL);
+        (void)typecheck_program(&tc, prog);
+        Codegen cg; cg_init(&cg, DEV_NULL);
+        WasmBuf bin;
+        (void)cg_compile_program(&cg, prog, &bin);
+        wasm_free(&bin);
+    });
+
+    BENCH("codegen_match_heavy", {
+        Lexer lex; lexer_init(&lex, MATCH_HEAVY);
         Parser p;  parser_init(&p, &lex);
         AstNode *prog = parser_parse_program(&p);
         TypeChecker tc; typecheck_init(&tc, DEV_NULL);
