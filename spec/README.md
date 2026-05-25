@@ -15,10 +15,11 @@ The spec evolves alongside the compiler. Sections marked **stable** match what t
 | [Protocols: State](protocols/state.md) | draft (issue [#8](https://github.com/cleave-lang/cleave/issues/8)) | First full write-up landed; iterating |
 | [Protocols: DataAvailability](protocols/da.md) | draft (issue [#16](https://github.com/cleave-lang/cleave/issues/16)) | First full write-up landed; iterating |
 | [Effect system](effects.md) | draft (issue [#9](https://github.com/cleave-lang/cleave/issues/9)) | First full write-up landed; iterating |
-| Module bodies (state, gas, fn, effect) | planned | Parser does not yet handle these |
-| Type system | planned | No type checker exists yet |
-| ABI (WASM hostcalls) | planned | Codegen lands in v0.3 |
-| Standard library reference | planned | First impls land in v0.2 |
+| [ABI (WASM hostcalls)](abi/wasm.md) | stable | Hostcall surface that codegen targets and the runtime implements |
+| [RFCs (active proposals)](rfcs/README.md) | varies | See `rfcs/` for active design proposals; structure + lifecycle documented in the directory README |
+| Module bodies (state, gas, fn, effect) | stable | Parser, type checker, codegen all handle these now |
+| Type system | stable (basic) | Primitive types + fn types + opaque generics; sum types gated on RFC #42 |
+| Standard library reference | planned | First impls land in v0.5+ (#53 consensus, #54 state) |
 
 ## Versioning
 

@@ -8,6 +8,14 @@ Prose references a version as `v0.X.Y`; headings stay bare `[0.X.Y]`.
 
 ### Added
 
+- RFC process. `spec/rfcs/` directory with a README documenting the lifecycle (draft → accepted → implemented / superseded / rejected), a `0000-template.md` for new RFCs, and the five existing RFCs migrated into structured files with YAML frontmatter (number, title, status, authors, tracking issue, created date):
+  - `0001-memory-model.md` (tracking #42)
+  - `0002-extern-host-abi.md` (tracking #55)
+  - `0003-project-metadata.md` (tracking #45)
+  - `0004-cross-engine-state.md` (tracking #46)
+  - `0005-third-party-protocols.md` (tracking #65)
+  
+  GitHub issues stay as the discussion thread; RFC files are the source of truth for proposal text. `spec/README.md` updated with a pointer to the RFC index and the lifecycle. Closes #66.
 - Subsystem keys in the chain manifest accept arbitrary identifiers, not just the five stdlib axes (`consensus`, `gas`, `state`, `exec`, `da`). A chain can declare any axis it cares about as a first-class subsystem: `privacy: GrothProver<curve=BN254>`, `mev: FlashbotsBundler`, etc. Lifts the parser-layer gatekeeping that was blocking third-party protocol extensions at the chain layer. Closes #64.
 - Parser test reworked: `test_error_unknown_subsystem_key` (which asserted "unknown:" was rejected) replaced by `test_arbitrary_subsystem_key_parses` (asserts `privacy: ...` works) plus `test_subsystem_key_can_still_be_stdlib_keyword` (regression guard that `consensus:`, `state:`, etc. still parse the same way).
 - `spec/grammar.ebnf` updated: `SubsystemKey = IDENT` instead of the enumerated five names; comment explains the stdlib axes are still conventions, just not parser-level requirements.
