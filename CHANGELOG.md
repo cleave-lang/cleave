@@ -6,6 +6,10 @@ Prose references a version as `v0.X.Y`; headings stay bare `[0.X.Y]`.
 
 ## [Unreleased]
 
+### Changed
+
+- `spec/rfcs/0001-memory-model.md` expanded from open-design to decision-ready proposal. Concrete syntax examples (move semantics, borrows, RAII drop). Resolutions to 7 of 10 originally-open questions (stack vs heap, string layout, collection placement, move-vs-copy default, references, drop, persistent state). 3 questions remain genuinely open (lifetime annotations, custom allocators, async interaction). Counterargument section steelmanning GC / `unsafe` / "C++ with extra steps". Migration path documented (existing examples compile unchanged; impact is on future heap-allocated types). Implementation roadmap split into 5 phases totaling ~3,700 LoC across 5 PRs. Decision criteria added so the RFC has a clear bar for moving from `draft` to `accepted`.
+
 ### Added
 
 - RFC process. `spec/rfcs/` directory with a README documenting the lifecycle (draft → accepted → implemented / superseded / rejected), a `0000-template.md` for new RFCs, and the five existing RFCs migrated into structured files with YAML frontmatter (number, title, status, authors, tracking issue, created date):
