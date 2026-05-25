@@ -27,11 +27,15 @@
  *   - local = expr           -> <expr>; local.set <idx>
  *   - module-fn call         -> args...; call <fn index>
  *   - if / else / else-if    -> <cond>; if; <then>; else; <else>; end (issue #49)
+ *   - match literal arms     -> save scrutinee; chained i64.eq+if/else (issue #43)
  *   - block trailing expr    -> becomes the function's return value
  *
  * What we deliberately reject
  * ---------------------------
- *   - match (issue #43); loops (no issue yet, deliberate)
+ *   - Loops (no language construct yet, deliberate)
+ *   - match binding patterns (`x => use(x)`): identifiers in pattern
+ *     position currently act as wildcards; binding patterns need
+ *     locals + sum types and are gated on #44, #48
  *   - if-as-expression (`let x = if c { 1 } else { 2 }`): grammar does
  *     not parse if at expression position today; lift when the parser
  *     does
@@ -79,9 +83,17 @@ typedef struct {
     size_t     n_states;
     FnEntry   *fns;
     size_t     n_fns;
-    /* per-function local table (params today; lets later) */
+    /* per-function local table (params + let bindings + match scratch) */
     LocalEntry *locals;
     size_t     n_locals;
+    /* Index of a shared scratch local used by `emit_match` to hold the
+     * scrutinee value while a chain of equality comparisons runs.
+     * Allocated only when the fn body contains at least one match.
+     * Matches do not nest in a way that needs separate slots (each
+     * match completes its arm-selection chain before any arm body
+     * executes), so one scratch per fn is sufficient. */
+    int        has_match_scratch;
+    uint32_t   match_scratch_local;
 } CodegenCtx;
 
 /* ============== diagnostics ============== */
@@ -342,9 +354,18 @@ static void emit_call(CodegenCtx *ctx, WasmBuf *body, AstNode *node) {
  * (`x = y`), because both state_set (a void hostcall) and local.set
  * consume the value silently.  Callers use this to decide whether
  * trailing-expression slots and if-branch results need a `drop` or
- * fn-body default-zero to balance the stack. */
+ * fn-body default-zero to balance the stack.
+ *
+ * For blocks, we recurse into `block.result`: a block leaves a value
+ * iff its trailing expression does.  Lets `emit_match` correctly
+ * decide whether to drop after each arm body, since arm bodies are
+ * full expressions that may themselves be blocks ending in an
+ * assignment. */
 static int leaves_value_on_stack(const AstNode *expr) {
     if (!expr) return 0;
+    if (expr->kind == AST_EXPR_BLOCK) {
+        return leaves_value_on_stack(expr->as.block.result);
+    }
     if (expr->kind == AST_EXPR_BINARY
         && expr->as.binary.op.length == 1
         && expr->as.binary.op.start[0] == '=') {
@@ -377,6 +398,7 @@ static int leaves_i32_on_stack(const AstNode *node) {
 }
 
 static void emit_if(CodegenCtx *ctx, WasmBuf *body, AstNode *node);
+static void emit_match(CodegenCtx *ctx, WasmBuf *body, AstNode *node);
 static void emit_block(CodegenCtx *ctx, WasmBuf *body, AstNode *node);
 
 /* Emit one branch of an if statement.  v0 if statements have an empty
@@ -399,6 +421,96 @@ static void emit_if_branch(CodegenCtx *ctx, WasmBuf *body, AstNode *branch) {
         /* `else if` chain: nest another if/else/end. */
         emit_if(ctx, body, branch);
     }
+}
+
+/* v0 match codegen: lowers `match scrut { p1 => e1, ..., _ => en }`
+ * into a chain of equality comparisons against the scrutinee + nested
+ * if/else.  Supported patterns:
+ *   - integer literal: compares `scrut == literal` via i64.eq
+ *   - bool literal: same
+ *   - identifier (including `_`): always matches, acts as a final
+ *     else branch.  We treat any identifier as a wildcard for v0;
+ *     binding patterns (`x => use(x)`) and constructor patterns need
+ *     locals + sum types and are gated on issues #44, #48.
+ *
+ * Match is statement-shaped in v0: each arm body's value is dropped
+ * after evaluation.  When sum types and match-as-expression land,
+ * arms will share a result type and the chain block-types update.
+ *
+ * Wildcard arms after the first short-circuit further arms; we honor
+ * them as the chain terminator and stop emitting subsequent arms.
+ * An unmatched scrutinee with no wildcard is a silent no-op today;
+ * exhaustiveness checking lives in the type checker (future work).
+ */
+static int pattern_is_wildcard(const AstNode *pat) {
+    return pat && pat->kind == AST_EXPR_IDENT;
+}
+
+static void emit_arm_body(CodegenCtx *ctx, WasmBuf *body, AstNode *arm_body) {
+    emit_expr(ctx, body, arm_body);
+    if (leaves_value_on_stack(arm_body)) {
+        wasm_write_byte(body, WASM_OP_DROP);
+    }
+}
+
+static void emit_match_arms(CodegenCtx *ctx, WasmBuf *body,
+                            AstNode **arms, size_t n_arms, size_t idx,
+                            uint32_t scratch) {
+    if (idx >= n_arms) return;
+    AstNode *arm = arms[idx];
+    AstNode *pattern = arm->as.match_arm.pattern;
+    AstNode *arm_body = arm->as.match_arm.body;
+
+    if (pattern_is_wildcard(pattern)) {
+        /* Wildcard absorbs the rest of the chain; subsequent arms are
+         * unreachable. v0 codegen silently drops them. */
+        emit_arm_body(ctx, body, arm_body);
+        return;
+    }
+
+    /* Comparison: local.get scratch; <pattern>; i64.eq -> i32 on stack. */
+    wasm_write_byte(body, WASM_OP_LOCAL_GET);
+    wasm_write_leb_u32(body, scratch);
+    emit_expr(ctx, body, pattern);
+    wasm_write_byte(body, WASM_OP_I64_EQ);
+
+    wasm_write_byte(body, WASM_OP_IF);
+    wasm_write_byte(body, WASM_BLOCKTYPE_EMPTY);
+
+    emit_arm_body(ctx, body, arm_body);
+
+    int has_more = (idx + 1) < n_arms;
+    if (has_more) {
+        wasm_write_byte(body, WASM_OP_ELSE);
+        emit_match_arms(ctx, body, arms, n_arms, idx + 1, scratch);
+    }
+
+    wasm_write_byte(body, WASM_OP_END);
+}
+
+static void emit_match(CodegenCtx *ctx, WasmBuf *body, AstNode *node) {
+    StmtMatch *m = &node->as.match_stmt;
+
+    if (!ctx->has_match_scratch) {
+        /* The pre-scan should have allocated the scratch local. If it
+         * didn't, the locals declaration is wrong and the resulting
+         * WASM will be invalid; surface it as a clear diagnostic. */
+        cg_report(ctx, &node->span,
+                  "internal: match statement encountered but scratch "
+                  "local was not allocated during pre-scan");
+        return;
+    }
+
+    /* Emit scrutinee onto the stack, then save into the scratch local
+     * so subsequent comparisons can re-read it without re-evaluating. */
+    emit_expr(ctx, body, m->scrutinee);
+    wasm_write_byte(body, WASM_OP_LOCAL_SET);
+    wasm_write_leb_u32(body, ctx->match_scratch_local);
+
+    if (m->n_arms == 0) return;
+
+    emit_match_arms(ctx, body, m->arms, m->n_arms, 0,
+                    ctx->match_scratch_local);
 }
 
 static void emit_if(CodegenCtx *ctx, WasmBuf *body, AstNode *node) {
@@ -467,6 +579,8 @@ static void emit_block(CodegenCtx *ctx, WasmBuf *body, AstNode *node) {
             wasm_write_leb_u32(body, bind->local_index);
         } else if (s->kind == AST_STMT_IF) {
             emit_if(ctx, body, s);
+        } else if (s->kind == AST_STMT_MATCH) {
+            emit_match(ctx, body, s);
         } else {
             cg_report(ctx, &s->span,
                       "statement kind %s not yet supported in v0 codegen",
@@ -534,36 +648,48 @@ static void emit_expr(CodegenCtx *ctx, WasmBuf *body, AstNode *node) {
 
 /* ============== fn body emission ============== */
 
-/* Walk the body block's top-level statements once to count let
- * bindings. v0 only scans the immediate body block since the codegen
- * still rejects nested control flow (`if`, `match`, etc.). Once
- * control-flow lowering lands, this scan must recurse into nested
- * blocks; the rest of the let machinery already handles per-let
- * symbol bindings irrespective of nesting depth. */
-static size_t count_let_bindings(const AstNode *body) {
-    if (!body || body->kind != AST_EXPR_BLOCK) return 0;
+/* Walk the body block's top-level statements once to count locals the
+ * codegen will need:
+ *   - one local per `let` binding (issue #44)
+ *   - one shared scratch local if any `match` statement appears (#43)
+ *
+ * v0 only scans the immediate body block since the codegen still does
+ * not recurse for nested-stmt local discovery; lets buried inside
+ * if/match branches are missed. The grammar already accepts them and
+ * the parser builds the AST, but pre-scan ignores them for now. A
+ * future iteration will recurse; see the same TODO on issue #44.
+ */
+typedef struct {
+    size_t n_lets;
+    int    has_match;
+} LocalsCount;
+
+static LocalsCount count_local_slots(const AstNode *body) {
+    LocalsCount c = { 0, 0 };
+    if (!body || body->kind != AST_EXPR_BLOCK) return c;
     const ExprBlock *b = &body->as.block;
-    size_t n = 0;
     for (size_t i = 0; i < b->n_stmts; ++i) {
-        if (b->stmts[i]->kind == AST_STMT_LET) n++;
+        AstKind k = b->stmts[i]->kind;
+        if (k == AST_STMT_LET)   c.n_lets++;
+        if (k == AST_STMT_MATCH) c.has_match = 1;
     }
-    return n;
+    return c;
 }
 
 static void emit_fn_body(CodegenCtx *ctx, AstNode *fn_decl,
                          WasmBuf *body_out) {
     FnDecl *f = &fn_decl->as.fn;
 
-    /* Pre-scan the body to count let bindings so we can size the local
-     * table up front and emit the correct WASM `locals` declaration.
-     * Params occupy local indices [0, n_params); let bindings occupy
-     * [n_params, n_params + n_lets). */
-    size_t n_lets = count_let_bindings(f->body);
+    /* Pre-scan the body to size the local table. Locals layout:
+     *   [0, n_params)                                  -- fn params
+     *   [n_params, n_params + n_lets)                  -- let bindings
+     *   [n_params + n_lets]                            -- match scratch (if any)
+     */
+    LocalsCount lc = count_local_slots(f->body);
+    size_t n_lets = lc.n_lets;
+    size_t n_extra_anon = lc.has_match ? 1 : 0;
 
-    /* Build the per-fn local table: params first, then a slot per let
-     * binding in source order. The let entries are filled in as we
-     * walk the body block below. */
-    size_t cap = f->n_params + n_lets;
+    size_t cap = f->n_params + n_lets + n_extra_anon;
     ctx->n_locals = 0;
     free(ctx->locals);
     ctx->locals = cap ? calloc(cap, sizeof(LocalEntry)) : NULL;
@@ -586,15 +712,28 @@ static void emit_fn_body(CodegenCtx *ctx, AstNode *fn_decl,
             ctx->n_locals++;
         }
     }
+    ctx->has_match_scratch = lc.has_match;
+    if (lc.has_match) {
+        /* Anonymous local at the end of the table.  No name binding;
+         * find_local won't surface it. emit_match references it via
+         * ctx->match_scratch_local. */
+        uint32_t idx = (uint32_t)ctx->n_locals;
+        ctx->locals[ctx->n_locals].name.start = NULL;
+        ctx->locals[ctx->n_locals].name.length = 0;
+        ctx->locals[ctx->n_locals].local_index = idx;
+        ctx->n_locals++;
+        ctx->match_scratch_local = idx;
+    }
 
-    /* Local declaration: 0 groups if no lets, else 1 group of n_lets
-     * i64 locals. All lets widen to i64 today (matching the rest of
-     * the v0 ABI); narrower widths land with sum types + struct types. */
-    if (n_lets == 0) {
+    /* Local declaration: 0 groups if no extra locals, else 1 group of
+     * (n_lets + n_extra_anon) i64 entries. All widen to i64 today,
+     * matching the rest of the v0 ABI. */
+    size_t total_extra = n_lets + n_extra_anon;
+    if (total_extra == 0) {
         wasm_write_leb_u32(body_out, 0);
     } else {
         wasm_write_leb_u32(body_out, 1);
-        wasm_write_leb_u32(body_out, (uint32_t)n_lets);
+        wasm_write_leb_u32(body_out, (uint32_t)total_extra);
         wasm_write_byte(body_out, WASM_TYPE_I64);
     }
 
