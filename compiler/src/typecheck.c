@@ -275,6 +275,24 @@ const char *type_describe(const Type *t) {
     return buf;
 }
 
+int type_is_copy(const Type *t) {
+    /* Permissive default for missing / unresolved types. Lets the
+     * checker stay quiet on identifiers we cannot place yet (e.g.
+     * stdlib constructors that the typecheck pass does not resolve).
+     * This is a soundness gap that will tighten as the type system
+     * grows; for v0 it deliberately errs on the side of "no spurious
+     * diagnostics on code the user did not get to write yet." */
+    if (!t) return 1;
+    switch (t->kind) {
+    case TY_UNKNOWN: return 1;
+    case TY_UNIT:    return 1;
+    case TY_PRIM:    return 1;
+    case TY_FN:      return 1;  /* function references are Copy */
+    case TY_GENERIC: return 0;  /* aggregates: Result<T>, Vec<T>, etc. */
+    }
+    return 1;
+}
+
 /* ============== diagnostics ============== */
 
 static void report_at(TypeChecker *tc, const Span *span, const char *fmt, ...) {
@@ -308,6 +326,12 @@ typedef struct {
     StrRef     name;
     const Type *type;
     int        depth;
+    /* Move-tracking flag (RFC 0001 Phase 1). When a non-Copy binding is
+     * consumed (passed by value to a fn, assigned to another binding,
+     * returned), this is set; subsequent reads error out as "use of
+     * moved value". Copy types keep this flag at 0 throughout their
+     * lifetime since every use is a value copy. */
+    int        moved;
 } ScopeEntry;
 
 typedef struct {
@@ -343,6 +367,7 @@ static void scope_bind(Scope *s, StrRef name, const Type *type) {
     s->entries[s->n].name = name;
     s->entries[s->n].type = type;
     s->entries[s->n].depth = s->depth;
+    s->entries[s->n].moved = 0;
     s->n++;
 }
 
@@ -355,6 +380,46 @@ static const Type *scope_lookup(const Scope *s, StrRef name) {
         }
     }
     return NULL;
+}
+
+/* Mutable variant of scope_lookup. Returns the most-recent binding
+ * matching `name`, so callers can read or update its `moved` flag. */
+static ScopeEntry *scope_lookup_mut(Scope *s, StrRef name) {
+    for (size_t i = s->n; i-- > 0; ) {
+        ScopeEntry *e = &s->entries[i];
+        if (e->name.length == name.length &&
+            memcmp(e->name.start, name.start, name.length) == 0) {
+            return e;
+        }
+    }
+    return NULL;
+}
+
+/* Mark `name` as moved in scope. No-op if the binding is missing or
+ * already moved, or if its type is Copy (Copy types never move).
+ * Returns 1 if the binding was actually flipped to moved, 0 otherwise. */
+static int scope_mark_moved(Scope *s, StrRef name) {
+    ScopeEntry *e = scope_lookup_mut(s, name);
+    if (!e) return 0;
+    if (type_is_copy(e->type)) return 0;
+    if (e->moved) return 0;
+    e->moved = 1;
+    return 1;
+}
+
+/* Returns 1 if `name` names a binding that has already been moved.
+ * Returns 0 otherwise (including the case where the binding doesn't
+ * exist; check_expr's identifier path handles unresolved names via
+ * the normal scope_lookup -> Unknown fallthrough). */
+static int scope_is_moved(const Scope *s, StrRef name) {
+    for (size_t i = s->n; i-- > 0; ) {
+        const ScopeEntry *e = &s->entries[i];
+        if (e->name.length == name.length &&
+            memcmp(e->name.start, name.start, name.length) == 0) {
+            return e->moved;
+        }
+    }
+    return 0;
 }
 
 /* ============== expression checker ============== */
@@ -429,11 +494,26 @@ static const Type *check_binary(TypeChecker *tc, Scope *scope, AstNode *node) {
     return type_unknown();
 }
 
+/* Mark the source binding of `expr` as moved if appropriate (RFC 0001
+ * move semantics). Only fires when the expression is a bare identifier
+ * referring to a non-Copy binding. Compound expressions (e.g. method
+ * chains, struct field access, indexing) bubble up to their own
+ * tracking in a richer follow-up; v0 only handles the common case of
+ * passing a let-binding directly. */
+static void consume_if_movable(Scope *scope, AstNode *expr) {
+    if (!expr || expr->kind != AST_EXPR_IDENT) return;
+    scope_mark_moved(scope, expr->as.ident.name);
+}
+
 static const Type *check_call(TypeChecker *tc, Scope *scope, AstNode *node) {
     ExprCall *c = &node->as.call;
     const Type *callee_t = check_expr(tc, scope, c->callee);
     for (size_t i = 0; i < c->n_args; ++i) {
         check_expr(tc, scope, c->args[i]);
+        /* Passing a non-Copy value by name moves it into the callee.
+         * Mark after the read so the use-of-moved diagnostic fires on
+         * subsequent reads, not on this one. */
+        consume_if_movable(scope, c->args[i]);
     }
     if (callee_t && callee_t->kind == TY_FN) {
         if (c->n_args != callee_t->as.fn.n_params) {
@@ -479,6 +559,13 @@ static const Type *check_expr(TypeChecker *tc, Scope *scope, AstNode *node) {
         break;
     case AST_EXPR_IDENT: {
         const Type *bound = scope_lookup(scope, node->as.ident.name);
+        if (bound && !type_is_copy(bound) &&
+            scope_is_moved(scope, node->as.ident.name)) {
+            report_at(tc, &node->span,
+                      "use of moved value '%.*s'",
+                      (int)node->as.ident.name.length,
+                      node->as.ident.name.start);
+        }
         t = bound ? bound : type_unknown();
         break;
     }
@@ -537,6 +624,12 @@ static void check_let(TypeChecker *tc, Scope *scope, AstNode *node) {
     StmtLet *l = &node->as.let_stmt;
     const Type *value_t = check_expr(tc, scope, l->value);
 
+    /* `let y = x` where x is non-Copy moves x into y. The new binding
+     * `y` starts fresh (moved=false); the source `x` is marked moved
+     * by consume_if_movable. Order matters: check_expr above already
+     * fired the use-of-moved diagnostic if x was already moved. */
+    consume_if_movable(scope, l->value);
+
     const Type *declared_t = NULL;
     if (l->type) {
         declared_t = resolve_type_expr(tc, l->type);
@@ -562,6 +655,9 @@ static void check_return(TypeChecker *tc, Scope *scope, AstNode *node,
         return;
     }
     const Type *value_t = check_expr(tc, scope, r->value);
+    /* Returning a non-Copy value moves it out of the function; the
+     * caller now owns it. */
+    consume_if_movable(scope, r->value);
     if (expected_ret && !type_equal(expected_ret, value_t)) {
         report_mismatch(tc, &node->span, expected_ret, value_t,
                         "return value");
