@@ -8,6 +8,12 @@ Prose references a version as `v0.X.Y`; headings stay bare `[0.X.Y]`.
 
 ### Added
 
+- Real gas budget enforcement on the WASM engine (`runtime/src/lib.rs`). The v0.3 runtime tracked `gas_used` per dimension but never aborted on overflow; that caveat is gone. Two layers of metering now compose:
+  - **Per-dimension gas budgets**: `Instance::set_gas_budget(dim, units)` sets a budget; `env.gas_consume(dim, amount)` traps the current call when `gas_used + amount > budget`. Dimensions without a budget set are unmetered. Lets chains express the multi-dimensional gas model from RFC #7 (cpu / storage / witness / etc.).
+  - **Wasmtime fuel**: enabled in `Config::consume_fuel(true)` so every WASM instruction consumes fuel. Catches infinite loops in pure WASM that never call into a hostcall. `Instance::set_fuel(units)` sets the budget; `Instance::fuel_remaining()` reports how much is left. Default is 10 billion units (`DEFAULT_FUEL`), generous enough that existing callers see no behavior change.
+- New `gas_budgets: HashMap<u32, u64>` on `HostState` and the new `Instance` setters / readers (`set_gas_budget`, `set_fuel`, `fuel_remaining`).
+- 7 new unit tests: unmetered call, under-budget call, over-budget traps with a clear "out of gas" message, orthogonal-dimension budget ignored, default fuel sufficient for 100 increment calls, fuel actually decreases across a call, zero-fuel traps. Plus a hand-crafted `GAS_TEST_WASM` constant (73 bytes) that exercises `env.gas_consume` since the v0.3 codegen does not yet emit gas_consume calls.
+- Closes #51.
 - Codegen for `match` statements (`compiler/src/codegen.c`). The v0.3 codegen rejected `match`; this lifts the restriction. v0 lowering: save scrutinee to a shared scratch local, then chain `i64.eq` comparisons inside nested `if 0x40 ... else ... end`. Supported patterns: integer literal, bool literal, identifier (treated as wildcard for v0 since binding patterns need locals + sum types). Wildcard arms terminate the chain as the innermost else branch. Closes #43.
 - Match scratch local. The fn-body pre-scan now detects any `match` statement and allocates one shared scratch local for the scrutinee value. Matches are sequential within a fn (the next match runs only after the previous arm body completes), so one scratch slot covers all matches in a fn.
 - `count_local_slots` helper replaces `count_let_bindings`. Returns both let-binding count and a match-presence flag, which `emit_fn_body` translates into a single locals declaration group.
