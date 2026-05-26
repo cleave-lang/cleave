@@ -6,6 +6,11 @@ Prose references a version as `v0.X.Y`; headings stay bare `[0.X.Y]`.
 
 ## [Unreleased]
 
+### Added
+
+- `papers/` directory for external-audience writeups (researchers, engineers at competing chains, funders). Distinct from `spec/rfcs/` (proposals) and `spec/protocols/` (stable specs). Has its own lifecycle: outline → draft → review → published → superseded.
+- `papers/design-sketch.md` outline. Position paper structure covering 12 sections + appendices: chain manifest as the central abstraction, multi-VM execution, effect-typed contracts, multi-dimensional gas, sampling-first data availability, implementation status, related work. Each section has 2-5 bullets sketching what the final prose will argue, citations to assemble, and open questions for the drafting phase. Target: 10-15 pages typeset, arxiv + project website, 3-6 months from outline to published. Lands the scaffolding for issue #67.
+
 ### Changed
 
 - `spec/rfcs/0004-cross-engine-state.md` expanded to decision-ready proposal. Commits to **option (b)** from the original 4 design candidates: unified KV addressed by `(engine, identity, key)` triples with a single Merkle root. Concrete byte-level key encoding (1-byte engine tag + 20-byte identity + variable engine-specific key), synthetic WASM module addresses (keccak256 of chain_id + module_name + version), cross-engine reads via host functions (WASM->EVM) and a reserved precompile (EVM->WASM), no cross-engine writes in v0. 4-phase implementation roadmap (~850 LoC total). Open questions reduced from 6 to 1 (perf-bench validation of <10% prefix-encoding overhead).
